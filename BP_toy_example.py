@@ -11,7 +11,7 @@ def __main__():
              'minimum_ecc': True,
              'n_samples': 10000,
              'total_iteration': 1000,
-             'batch_size': 64,
+             'batch_size': 512,
              'n_layer': 3,
              'n_hid': 64,
              'n_ip': 1,
