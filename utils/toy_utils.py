@@ -92,7 +92,7 @@ class Complex_Constraints:
 
     def sampling_infeasible(self, c, err, density):
         # def offset_sampling(data,c,err,density):
-        c = c.as_tensor(device=device)
+        c = torch.as_tensor(c, device=device)
         c_offset=c+torch.tensor([[err,err,np.sqrt(2)*err,np.sqrt(2)*err,np.sqrt(2)*err,np.sqrt(2)*err,0,0]]).to(device)
         offset=self.sampling_boudanry(c_offset.cpu().numpy())
         quadrant_1 = offset[((offset[:,0] > 0) & (offset[:,1] > 0))]

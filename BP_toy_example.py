@@ -10,8 +10,8 @@ def __main__():
              'softrange': True,
              'minimum_ecc': True,
              'n_samples': 10000,
-             'total_iteration': 10000,
-             'batch_size': 256,
+             'total_iteration': 1000,
+             'batch_size': 64,
              'n_layer': 3,
              'n_hid': 64,
              'n_ip': 1,
@@ -61,7 +61,7 @@ def __main__():
         plot_bp_loss(data, paras, instance_path, instance, n_dim, c_dim)
         plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_dim, err, density)
     # plot_bp_traj_varying_ip(data, paras, instance_path, instance, n_dim, c_dim, err, density)
-    plot_ip_bp_loss(data, paras, instance_path, instance, n_dim, c_dim)
+    # plot_ip_bp_loss(data, paras, instance_path, instance, n_dim, c_dim)
 
 if __name__ == '__main__':
     __main__()

@@ -7,31 +7,6 @@ import pickle
 defaults = config()
 DEVICE = torch.device("cuda:6") if torch.cuda.is_available() else torch.device("cpu")
 
-def main():
-    args = config()
-    for minimum_ecc in [True]:
-        for n_ip in [8]:
-            args['ipnn_para']['n_ip'] = n_ip
-            args['ipnn_para']['minimum_ecc'] = minimum_ecc
-            run_instance(args)
-    # probs: ['qp', 'convex_qcqp', 'socp', 'sdp', 'acopf', 'jccim']
-    # methods: ['WS', 'Proj', 'D_Proj', 'H_Proj', 'B_Proj']
-    # for prob in ['qp']:
-        # if prob in ['acopf', 'ccacopf']:
-        #     for size in [[200, 30000]]:
-        #         args['opfSize'] = size
-        #         args['probType'] = prob
-        #         run_instance(args)
-        # elif prob == 'sdp':
-        #     for size in [[1600, 40, 40, 10000]]:
-        #         args['probSize'] = size
-        #         args['probType'] = prob
-        #         run_instance(args)
-        # else:
-        #     for size in [[400, 100, 100, 10000]]:
-        #         args['probSize'] = size
-        #         args['probType'] = prob
-        #         run_instance(args)
 
 
 def load_instance(args):
