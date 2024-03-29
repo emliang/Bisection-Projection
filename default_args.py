@@ -6,7 +6,7 @@ def config():
     defaults['probSize'] = [[100, 50, 50, 10000],
                             [400, 100, 100, 10000],
                             [100, 10, 10, 10000],
-                            [400, 20, 20, 40000]][1]
+                            [400, 20, 20, 40000]][0]
     defaults['opfSize'] = [[30, 10000], [57, 10000], [118, 20000],[200, 30000],
                            [500, 30000], [793, 30000], [1354,30000], [2000, 30000]][0]
     defaults['testSize'] = 1024
@@ -15,21 +15,12 @@ def config():
     defaults['seed'] = 2023
 
     defaults['ipnn_para'] = \
-        {'training': True,
-         'c_samples': 10000, 'total_iteration': 10000, 'batch_size': 64,
+        {'training': False,
+         'c_samples': 10000, 'total_iteration': 10000, 'batch_size': 256,
          'n_layer': 3, 'n_ip': 1, 'softmin': True, 'softrange': True, 'minimum_ecc': True,
-         'n_boundary_point': 10, 'n_bisect_sampling': 5, 'w_penalty': 10, 'w_ecc': 1,
+         'n_boundary_point': 10, 'n_bisect_sampling': 10, 'w_penalty': 10, 'w_ecc': 1,
          'lr': 1e-4, 'lr_decay': 0.9, 'lr_decay_step': 1000,}
 
-    defaults['inn_para'] = \
-        {'training': False, 'testing': False,
-         'n_samples': 10000, 'c_samples': 10000,
-         'shape': 'square', 'bound': [0, 1], 'scale_ratio': 1,
-         'total_iteration': 10000, 'batch_size': 256,
-         'lr': 1e-4, 'lr_decay': 0.9, 'lr_decay_step': 1000,
-        'num_layer': 3, 'inv_type': 'made', 'bilip': True, 'L': 2,
-        'penalty_coefficient': 10, 'distortion_coefficient': 1, 'transport_coefficient': 0,
-        'testing_samples': 1024}
 
     defaults['nn_para'] = \
         {'training': False, 'testing': True, 'approach': 'supervise',

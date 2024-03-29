@@ -5,7 +5,6 @@ import cvxpy as cp
 import copy
 import scipy as sp
 import multiprocessing as mp
-from utils.run_pf1 import runpf
 from pypower.api import opf
 torch.set_default_dtype(torch.float64)
 n_process = 10
