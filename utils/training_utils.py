@@ -2,7 +2,12 @@ import numpy as np
 import torch
 import torch.optim as optim
 import time
-# torch.set_default_dtype(torch.float64)
+
+
+
+
+
+
 
 ###################################################################
 # Unsupervised Training for Minimum-Distortion-Homeomoprhic Mapping
@@ -328,8 +333,12 @@ def homeo_bisection(model, constraints, args, x_infeasible, c_infeasible):
     with torch.no_grad():
         bias = torch.tensor(np.mean(args['inn_para']['bound']), device=x_infeasible.device).view(1, -1)
         x_latent_infeasible, _, _ = model.inverse(x_infeasible, c_infeasible)
-        alpha_upper = torch.ones([c_infeasible.shape[0], 1], device=x_infeasible.device)
-        alpha_lower = torch.zeros([c_infeasible.shape[0], 1], device=x_infeasible.device)
+        if len(x_infeasible.shape)==2:
+            alpha_upper = torch.ones([c_infeasible.shape[0], 1], device=x_infeasible.device)
+            alpha_lower = torch.zeros([c_infeasible.shape[0], 1], device=x_infeasible.device)
+        else:
+            alpha_upper = torch.ones([c_infeasible.shape[0], 1, 1], device=x_infeasible.device)
+            alpha_lower = torch.zeros([c_infeasible.shape[0], 1, 1], device=x_infeasible.device)
         for k in range(steps):
             alpha = (1-bis_step)*alpha_lower + bis_step*alpha_upper
             xt, _, _ = model(alpha * (x_latent_infeasible - bias) + bias, c_infeasible)
@@ -468,6 +477,11 @@ def diff_projection(data, X, Y, args):
 
 
 
+
+
+###################################################################
+# Other useful functions
+###################################################################
 
 
 

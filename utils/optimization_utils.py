@@ -5,6 +5,7 @@ import cvxpy as cp
 import copy
 import scipy as sp
 import multiprocessing as mp
+from utils.run_pf1 import runpf
 from pypower.api import opf
 torch.set_default_dtype(torch.float64)
 n_process = 10
@@ -232,6 +233,81 @@ def solve_warmstart_problem(args):
         sol = np.concatenate([pg, qg, vm, va])
     return sol
 
+def solve_feasibility_problem(args):
+    prob_type = args[0]
+    if prob_type == 'qp':
+        prob_type, Q, p, A, G, h, L, U, Xi = args
+        y = cp.Variable(len(Q))
+        prob = cp.Problem([G @ y <= h, y <= U, y >= L,
+                           A @ y == Xi])
+        prob.solve()
+        sol = y.value
+    elif prob_type == 'qcqp':
+        prob_type, Q, p, A, G, H, h, L, U, Xi, ydim, nineq = args
+        y = cp.Variable(ydim)
+        constraints = [A @ y == Xi, y <= U, y >= L]
+        for i in range(nineq):
+            Ht = H[i]
+            Gt = G[i]
+            ht = h[i]
+            constraints.append(0.5 * cp.quad_form(y, Ht) + Gt.T @ y <= ht)
+        prob = cp.Problem(cp.Minimize(0), constraints)
+        prob.solve()
+        sol = y.value
+    elif prob_type == 'socp':
+        prob_type, Xi, Q, p, A, G, h, C, d, L, U, ydim, nineq = args
+        y = cp.Variable(ydim)
+        soc_constraints = [cp.SOC(C[i].T @ y + d[i], G[i] @ y + h[i]) for i in range(nineq)]
+        constraints = soc_constraints + [A @ y == Xi] + [y <= U] + [y >= L]
+        prob = cp.Problem(constraints)
+        prob.solve()
+        sol = y.value
+    elif prob_type == 'sdp':
+        prob_type, Xi, Q, A, L, U, ymdim, neq = args
+        y = cp.Variable((ymdim, ymdim), symmetric=True)
+        prob = cp.Problem(
+                          [y >> 0] + [y <= U] + [y >= L] +
+                          [cp.trace(A[i] @ y) == Xi[i] for i in range(neq)])
+        prob.solve()
+        sol = y.value
+    elif prob_type == 'jccim':
+        prob_type, Q, p, A, W, G, h, L, U, Xi = args
+        num_scenario = len(W)
+        y = cp.Variable(len(Q))
+        constraints = [y <= U, y >= L]
+        constraints += [A @ y >= Xi + W[i] for i in range(num_scenario)]
+        constraints += [G @ y <= h]
+        # constraints.append(cp.sum(z) / num_scenario >= 0.9)
+        prob = cp.Problem(cp.Minimize(0), constraints)
+        prob.solve()
+        sol = y.value
+    elif prob_type == 'acpf':
+        prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, genbase = args
+        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
+        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
+        ppc['bus'][spv, VM] = vmi[spv]
+        ppc['gen'][pv_, PG] = pgi[pv_]
+        my_result = runpf(ppc, ppopt)[0]
+        pg = my_result['gen'][:, PG] / genbase
+        qg = my_result['gen'][:, QG] / genbase
+        vm = my_result['bus'][:, VM]
+        va = np.deg2rad(my_result['bus'][:, VA])
+        y = np.concatenate([pg, qg, vm, va])
+        sol = y.value
+    elif prob_type == 'acopf':
+        prob_type, i, Xi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, genbase = args
+        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
+        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
+        ppc['gencost'][:, COST] = 1
+        ppc['gencost'][:, COST + 1] = 1
+        my_result = opf(ppc, ppopt)
+        pg = my_result['gen'][:, PG] / genbase
+        qg = my_result['gen'][:, QG] / genbase
+        vm = my_result['bus'][:, VM]
+        va = np.deg2rad(my_result['bus'][:, VA])
+        sol = np.concatenate([pg, qg, vm, va])
+    return sol
+
 
 ###################################################################
 # Base PROBLEM
@@ -403,6 +479,20 @@ class QP_Problem(Base_Problem):
             raise NotImplementedError
         return sols
 
+    def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
+        if solver_type == 'cvxpy':
+            print('running cvxpy', end='\r')
+            Q, p, A, G, h, L, U = \
+                self.Q_np, self.p_np, self.A_np, self.G_np, self.h_np, self.L_np, self.U_np
+            X_np = X.detach().cpu().numpy()
+            with mp.Pool(processes=n_process) as pool:
+                params = [('qp', Q, p, A, G, h, L, U, Xi) for Xi in X_np]
+                Y = pool.map(solve_feasibility_problem, params)
+            sols = np.array(Y)
+        else:
+            raise NotImplementedError
+        return sols
+
     def opt_proj(self, X, Y_pred, solver_type='cvxpy', tol=1e-5):
         if solver_type == 'cvxpy':
             print('running cvxpy', end='\r')
@@ -482,6 +572,21 @@ class QCQP_Probem(QP_Problem):
             with mp.Pool(processes=n_process) as pool:
                 params = [('qcqp',Q, p, A, G, H, h, L, U, Xi, self.ydim, self.nineq) for Xi in X_np]
                 Y = pool.map(solve_opt_problem, params)
+
+            sols = np.array(Y)
+        else:
+            raise NotImplementedError
+        return sols
+
+    def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
+        if solver_type == 'cvxpy':
+            Q, p, A, G, H, h, L, U = \
+                self.Q_np, self.p_np, self.A_np, self.G_np, self.H_np, self.h_np, self.L_np, self.U_np
+            X_np = X.detach().cpu().numpy()
+
+            with mp.Pool(processes=n_process) as pool:
+                params = [('qcqp',Q, p, A, G, H, h, L, U, Xi, self.ydim, self.nineq) for Xi in X_np]
+                Y = pool.map(solve_feasibility_problem, params)
 
             sols = np.array(Y)
         else:
@@ -574,6 +679,21 @@ class SOCP_Probem(QP_Problem):
             with mp.Pool(processes=n_process) as pool:
                 params = [('socp', Xi, Q, p, A, G, h, C, d, L, U, self.ydim, self.nineq) for Xi in X_np]
                 results = pool.map(solve_opt_problem, params)
+            sols = np.array(results)
+        else:
+            raise NotImplementedError
+        return sols
+
+    def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
+        if solver_type == 'cvxpy':
+            print('running cvxpy', end='\r')
+            Q, p, A, G, h, C, d, L, U = \
+                self.Q_np, self.p_np, self.A_np, self.G_np, self.h_np, self.c_np, self.d_np, self.L_np, self.U_np
+            X_np = X.detach().cpu().numpy()
+
+            with mp.Pool(processes=n_process) as pool:
+                params = [('socp', Xi, Q, p, A, G, h, C, d, L, U, self.ydim, self.nineq) for Xi in X_np]
+                results = pool.map(solve_feasibility_problem, params)
             sols = np.array(results)
         else:
             raise NotImplementedError
@@ -799,6 +919,21 @@ class SDP_Probem(Base_Problem):
             raise NotImplementedError
         return sols
 
+    def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
+        if solver_type == 'cvxpy':
+            print('running cvxpy', end='\r')
+            Q, A, L, U = self.Q_np, self.A_np, self.L_np, self.U_np
+            X_np = X.detach().cpu().numpy()
+
+            with mp.Pool(processes=n_process) as pool:
+                args = [('sdp', Xi, Q, A, L, U, self.ymdim, self.neq) for Xi in X_np]
+                results = pool.map(solve_feasibility_problem, args)
+
+            sols = np.array(results)
+        else:
+            raise NotImplementedError
+        return sols
+
     def opt_proj(self, X, Y_pred, solver_type='cvxpy', tol=1e-5):
         Y_pred = self.recover_matrix_from_lower_triangle_batch(Y_pred, self.ymdim)
         if solver_type == 'cvxpy':
@@ -836,6 +971,8 @@ class SDP_Probem(Base_Problem):
         sols = torch.tensor(sols)
         sols = self.get_lower_triangle_from_matrix_batch(sols, self.ymdim)
         return sols
+
+
 
 
 
@@ -970,6 +1107,21 @@ class JCCIM_Problem(Base_Problem):
             raise NotImplementedError
         return sols
 
+
+    def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
+        if solver_type == 'cvxpy':
+            print('running cvxpy', end='\r')
+            Q, p, A, W, G, h, L, U = \
+                self.Q_np, self.p_np, self.A_np, self.W_np, self.G_np, self.h_np, self.L_np, self.U_np
+            X_np = X.detach().cpu().numpy()
+            with mp.Pool(processes=n_process) as pool:
+                params = [('jccim', Q, p, A, W, G, h, L, U, Xi) for Xi in X_np]
+                Y = pool.map(solve_feasibility_problem, params)
+            sols = np.array(Y)
+        else:
+            raise NotImplementedError
+        return sols
+
     def opt_proj(self, X, Y_pred, solver_type='cvxpy', tol=1e-5):
         if solver_type == 'cvxpy':
             print('running cvxpy', end='\r')
@@ -1010,7 +1162,7 @@ class JCCIM_Problem(Base_Problem):
 ###################################################################
 # AC-OPF (Alternating-Current Optimal Power FLow)
 ###################################################################
-from pypower.api import makeYbus
+from pypower.api import makeYbus, ext2int
 from pypower import idx_bus, idx_gen, idx_brch
 from pypower.idx_cost import COST
 from pypower.ppoption import ppoption
@@ -1028,7 +1180,7 @@ class ACOPF_Problem:
                               (p_g - p_d) + (q_g - q_d)i = diag(vmag e^{i*vang}) conj(Y) (vmag e^{-i*vang})
     """
 
-    def __init__(self, data, test_size):
+    def __init__(self, data, test_size=1024, training=True):
         ## Define optimization problem input and output variables
         ppc = data['ppc']
         self.load_ppc(ppc)
@@ -1079,37 +1231,38 @@ class ACOPF_Problem:
         self.amin = torch.tensor(np.deg2rad(ppc['branch'][:, idx_brch.ANGMIN]))
         self.slackva = self.va_init[self.slack]
 
-        ## Load data
-        ## Define train/valid/test split
-        # self.valid_frac = valid_frac
-        # self.test_frac = test_frac
-        demand = data['Dem'] / self.baseMVA
-        gen = data['Gen'] / self.genbase
-        voltage = data['Vol']
-        X = np.concatenate([np.real(demand), np.imag(demand)], axis=1)
-        Y = np.concatenate([np.real(gen), np.imag(gen),
-                            np.abs(voltage), np.angle(voltage)], axis=1)
-        feas_mask = ~np.isnan(Y).any(axis=1)
-        self.X = torch.tensor(X[feas_mask])
-        self.Y = torch.tensor(Y[feas_mask])
-        # cons_vio = self.ineq_resid(self.X, self.Y).max(dim=1)[0] + self.eq_resid(self.X, self.Y).max(dim=1)[0]
-        # feas_mask = cons_vio<=1e-5
-        # self.X = self.X[feas_mask]
-        # self.Y = self.Y[feas_mask]
-        # print(self.X.shape)
-        # print(1/0)
+        if training:
+            ## Load data
+            ## Define train/valid/test split
+            # self.valid_frac = valid_frac
+            # self.test_frac = test_frac
+            demand = data['Dem'] / self.baseMVA
+            gen = data['Gen'] / self.genbase
+            voltage = data['Vol']
+            X = np.concatenate([np.real(demand), np.imag(demand)], axis=1)
+            Y = np.concatenate([np.real(gen), np.imag(gen),
+                                np.abs(voltage), np.angle(voltage)], axis=1)
+            feas_mask = ~np.isnan(Y).any(axis=1)
+            self.X = torch.tensor(X[feas_mask])
+            self.Y = torch.tensor(Y[feas_mask])
+            # cons_vio = self.ineq_resid(self.X, self.Y).max(dim=1)[0] + self.eq_resid(self.X, self.Y).max(dim=1)[0]
+            # feas_mask = cons_vio<=1e-5
+            # self.X = self.X[feas_mask]
+            # self.Y = self.Y[feas_mask]
+            # print(self.X.shape)
+            # print(1/0)
 
-        self.xdim = X.shape[1]
-        self.ydim = Y.shape[1]
-        self.num = self.X.shape[0]
-        self.neq = 2 * self.nb
-        self.nineq = 4 * self.ng + 2 * self.nb + 2 * self.nl
-        self.nknowns = self.nslack
+            self.xdim = X.shape[1]
+            self.ydim = Y.shape[1]
+            self.num = self.X.shape[0]
+            self.neq = 2 * self.nb
+            self.nineq = 4 * self.ng + 2 * self.nb + 2 * self.nl
+            self.nknowns = self.nslack
 
-        self.trainX = self.X[:-test_size]
-        self.testX = self.X[-test_size:]
-        self.trainY = self.Y[:-test_size]
-        self.testY = self.Y[-test_size:]
+            self.trainX = self.X[:-test_size]
+            self.testX = self.X[-test_size:]
+            self.trainY = self.Y[:-test_size]
+            self.testY = self.Y[-test_size:]
 
         ## Define variables and indices for "partial completion" neural network
         self.PR = 'pgvm'  # 'vmva'
@@ -1540,6 +1693,22 @@ class ACOPF_Problem:
                 results = pool.map(solve_opt_problem, args)
         else:
             results = solve_opt_problem(('acopf', 0, X_np[0], ppc, ppopt, \
+                                     idx_bus.PD, idx_bus.QD, idx_gen.PG, idx_gen.QG, idx_bus.VM, idx_bus.VA, \
+                                     self.nb, self.baseMVA, self.genbase))
+        return torch.as_tensor(np.array(results)).to(X.device)
+
+    def opt_ip(self, X, solver_type='pypower', tol=1e-5):
+        X_np = X.detach().cpu().numpy()
+        ppc = self.ppc
+        ppopt = ppoption(OPF_ALG=560, OUT_ALL=0, VERBOSE=0, OPF_VIOLATION=tol, PDIPM_MAX_IT=100)  # MIPS PDIPM
+        if X.shape[0] > 1:
+            with mp.Pool(processes=n_process) as pool:
+                args = [('acopf', i, X_np[i], ppc, ppopt, \
+                         idx_bus.PD, idx_bus.QD, idx_gen.PG, idx_gen.QG, idx_bus.VM, idx_bus.VA, \
+                         self.nb, self.baseMVA, self.genbase) for i in range(X_np.shape[0])]
+                results = pool.map(solve_feasibility_problem, args)
+        else:
+            results = solve_feasibility_problem(('acopf', 0, X_np[0], ppc, ppopt, \
                                      idx_bus.PD, idx_bus.QD, idx_gen.PG, idx_gen.QG, idx_bus.VM, idx_bus.VA, \
                                      self.nb, self.baseMVA, self.genbase))
         return torch.as_tensor(np.array(results)).to(X.device)

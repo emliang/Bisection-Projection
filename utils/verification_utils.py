@@ -15,6 +15,7 @@ def nn_specification(model, prob, data):
     constraints = [cl <= c, c <= cu]  # box constraints on input
     relax_constraint = [cl <= c, c <= cu]  # box constraints on input
     # Iterate over the layers 
+    # constraints, x_partial = nn_mix_integer_formulation(model, c, constraints, relax_constraint)
     constraints, x_partial = nn_linear_relaxation_formulation(model, c, constraints, relax_constraint)
     ### upper/lower bound constraint
     if prob == 'qp':
@@ -150,4 +151,41 @@ def nn_linear_relaxation_formulation(model, c, constraints, relax_constraint):
         else:
             raise NotImplementedError(f"Layer type {type(layer)} not supported")
     return relax_constraint, prev
+
+def nn_sdp_relaxation_formulation(model, c, constraints, relax_constraint):
+    prev = c
+    for i, layer in enumerate(model):
+        if isinstance(layer, nn.Linear):
+            # Extract weights and biases
+            W = layer.weight.detach().numpy()
+            b = layer.bias.detach().numpy()
+            h = cp.Variable(layer.out_features)  # output of current linear layer
+            relax_constraint.append(h == W @ prev + b)  # linear transformation for this layer
+            prev = h
+        elif isinstance(layer, ResBlock):
+            L1, _, L2 = layer.net
+            ### First linear layer
+            W = L1.weight.detach().numpy()
+            b = L1.bias.detach().numpy()
+            y1 = cp.Variable(L1.out_features)  # output of current activation layer
+            relax_constraint.append(y1 == W @ prev + b)  # linear transformation for this layer
+
+            ### Activation layer
+            y2 = cp.Variable(L1.out_features)  # output of current activation layer
+            sdp_relax_constraint += [0 <= y2, y1 <= y2]
+            M = [cp.Variable((2, 2), PSD=True) for _ in range(L1.out_features)]  # PSD matrix for each neuron
+            for j in range(L1.out_features):
+                sdp_relax_constraint += [M[j][0, 0] == y2[j], M[j][1, 1] == y1[j], 
+                                         M[j][0, 1] == y2[j], M[j][1, 0] == y2[j]]
+            ### Second linear layer
+            W = L2.weight.detach().numpy()
+            b = L2.bias.detach().numpy()
+            y3 = cp.Variable(L2.out_features)  # output of current activation layer
+            sdp_relax_constraint.append(y3 == W @ y2 + b + h)  # linear transformation for this layer
+            prev = y3 
+        else:
+            raise NotImplementedError(f"Layer type {type(layer)} not supported")
+    return prev, sdp_relax_constraint
+
+
 
