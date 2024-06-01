@@ -1,11 +1,9 @@
-import torch
-
 from utils.training_utils import *
 from utils.sampling_utils import *
 from utils.toy_utils import *
 from utils.nn_utils import  *
 from default_args import  *
-
+from matplotlib.lines import Line2D
 
 args = config()
 
@@ -53,7 +51,8 @@ def scatter_constraint_approximation(model, constraints, x_tensor, instance_path
             xt, _, _ = model(x_tensor, t_tensor)
         # x = x_tensor.detach().cpu().numpy()
         xt = xt.detach().cpu().numpy()
-        constraints.fill_constraint(t)
+        # constraints.fill_constraint(t)
+        constraints.plot_boundary(t)
         plt.scatter(xt[:, 0], xt[:, 1], s=0.1, alpha=0.7, c=x_norm ,label='Constraint approximation')
         plt.title(titles[i], fontsize=char_size)
         plt.xlim([-2.2, 2.2])
@@ -64,7 +63,7 @@ def scatter_constraint_approximation(model, constraints, x_tensor, instance_path
     seed = paras['seed']
     shape = paras['shape']
     dis_coff = paras['distortion_coefficient']
-    plt.savefig(instance_path+f'/pics/{constraints.__class__.__name__}_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
+    plt.savefig(instance_path+f'/pics/{str(constraints)}_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
 
@@ -159,7 +158,7 @@ def scatter_constraint_evolution(model, constraints, x_tensor, instance_path, pa
     plt.subplots_adjust(wspace=0.15)
     seed = paras['seed']
     shape = paras['shape']
-    plt.savefig(instance_path+f'/pics/{constraints.__class__.__name__}_{shape}_{seed}_{len(t_test)}_constraint_evolution_scatter.png', bbox_inches='tight', dpi=300)
+    plt.savefig(instance_path+f'/pics/{str(constraints)}_{shape}_{seed}_{len(t_test)}_constraint_evolution_scatter.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
 
@@ -244,14 +243,19 @@ def scatter_projection_error(model, constraints, x_tensor, t_tensor, instance_pa
     # print('\nH-Proj gap compared with Proj:', np.mean((h_proj_error_list[index])/proj_error_list[index]))
     # print('\nSlope for curve:', np.mean((h_proj_error_list[index]))/np.mean(proj_error_list[index]))
     shape = args['inn_para']['shape']
-    plt.savefig(instance_path+f'/pics/{constraints.__class__.__name__}_{shape}_proj_error_scatter_{x_tensor.shape[1]}.png', bbox_inches='tight', dpi=300)
+    plt.savefig(instance_path+f'/pics/{str(constraints)}_{shape}_proj_error_scatter_{x_tensor.shape[1]}.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
     return
 
 def plot_projection_traj(model, constraints, c, simple_set, num_points=20):
-    x_tensor = constraints.sampling_infeasible(c, err=0.2, density=5).to(device)
-    c_tensor = torch.as_tensor(c).to(device).view(1,-1)
+    x_tensor = constraints.sampling_infeasible(c, err=0.2, density=10).to(constraints.device)
+    c_tensor = torch.as_tensor(c).to(constraints.device).view(1,-1)
+
+    penalty = constraints.cal_penalty(c_tensor.repeat(x_tensor.shape[0], 1), x_tensor).sum(-1)
+    x_tensor = x_tensor[penalty > 0]
+
+
     z_tensor,_,_ = model.inverse(x_tensor, c_tensor)
     x_feasible,_ = homeo_bisection(model, constraints, args, x_tensor, c_tensor.repeat(x_tensor.shape[0], 1))
     z_feasible_tensor, _, _ = model.inverse(x_feasible, c_tensor)
@@ -273,79 +277,74 @@ def plot_projection_traj(model, constraints, c, simple_set, num_points=20):
             center = z_feasible_tensor[i].view(1,-1)
             x_start = x_surface_tensor[i:i+1]
             x_end = center
-            inter = torch.linspace(0,1,num_interpolation).view(-1,1).to(device)
+            inter = torch.linspace(0,1,num_interpolation).view(-1,1).to(constraints.device)
             x_traj = x_start * (1-inter) + x_end * inter
             t_tensor = c_tensor.repeat(inter.shape[0], 1)
             with torch.no_grad():
-                xt, _, _ = model(x_traj.to(device), t_tensor.to(device))
+                xt, _, _ = model(x_traj, t_tensor)
             z_list.append(x_traj.cpu().numpy())
             x_list.append(xt.detach().cpu().numpy())
     return z_list, x_list
 
 def visualize_homeo_projection(model, constraints, x_tensor, instance_path, paras):
     simple_set = paras['shape']
-    t_test = constraints.t_test
+    if 'Ball' in instance_path:
+        seed = 2024
+        np.random.seed(seed)
+    else:
+        seed = 2002
+        np.random.seed(seed)
+    c = np.random.rand(3, constraints.c_dim)
+    t_test = c * (constraints.sampling_range[1] - constraints.sampling_range[0]) + constraints.sampling_range[0]
     t_num = len(t_test)
     model.eval()
-    fig = plt.figure(figsize=[(t_num+1)*(4+0.2), 4])
+    fig = plt.figure(figsize=[(t_num)*(4+0.2), 4.2])
     fig.tight_layout()
-    n_samples = x_tensor.shape[0]
-    grid = plt.GridSpec(1, t_num+1)
-    x = x_tensor.detach().cpu().numpy()
-    char_size = 26
-    if simple_set=='sphere':
-        x_norm = np.linalg.norm(x,ord=2, axis=1).T
-        norm_tile = r'$\mathcal{B}$: $2$-norm ball'
-    else:
-        x_norm = np.linalg.norm(x,ord=np.inf, axis=1).T
-        norm_tile = r'$\mathcal{B}$: $\infty$-norm ball'
+    grid = plt.GridSpec(1, t_num)
 
-    titles = [r'$\Phi(\mathcal{B},\theta_1)$',
-                r'$\Phi(\mathcal{B},\theta_2)$',
-                r'$\Phi(\mathcal{B},\theta_3)$',
-                r'$\Phi(\mathcal{B},\theta_4)$',
-                r'$\Phi(\mathcal{B},\theta_5)$',
-                r'$\Phi(\mathcal{B},\theta_6)$',
-                r'$\Phi(\mathcal{B},\theta_7)$',
-                r'$\Phi(\mathcal{B},\theta_8)$',
-                r'$\Phi(\mathcal{B},\theta_9)$',]
+    title_list = ['test input 1', 'test input 2', 'test input 3', 'test input 4']
+
     for i, t in enumerate(t_test):
-        plt.subplot(grid[0,i+1])
-        t_tensor = torch.tensor(t).to(device=x_tensor.device).view(1, -1).repeat(n_samples, 1)
+        plt.subplot(grid[0,i])
+        # t_tensor = torch.tensor(t).to(device=x_tensor.device).view(1, -1).repeat(n_samples, 1)
         # xt, _, _ = model(x_tensor, t_tensor)
         # xt = xt.detach().cpu().numpy()
         # plt.scatter(xt[:, 0], xt[:, 1], s=0.1, alpha=0.7, c=x_norm ,label='Constraint approximation')
         z_list, x_list = plot_projection_traj(model, constraints, t, simple_set, num_points=10)
         constraints.fill_constraint(t)
-        for traj in x_list:
-            plt.scatter(traj[0, 0], traj[0, 1], marker='.')
-            plt.scatter(traj[-1,0], traj[-1,1], marker='o', c='r')
+        for k, traj in enumerate(x_list):
+            if k==0:
+                plt.scatter(traj[-1,0], traj[-1,1],alpha=0.5, s=15, c='C0', zorder=3, label='Homeo. Proj. points')
+                plt.scatter(traj[0, 0], traj[0, 1], alpha=0.5, s=15, c='C1', zorder=3, label='Infeasible points')
+            else:
+                plt.scatter(traj[-1,0], traj[-1,1],alpha=0.5, s=15, c='C0', zorder=3)
+                plt.scatter(traj[0, 0], traj[0, 1], alpha=0.5, s=15, c='C1', zorder=3)
             plt.plot(traj[:,0],traj[:,1], linewidth=0.5, alpha=0.5, c='lightcoral')
-        plt.title(titles[i], fontsize=char_size)
-        plt.xlim([-2.2, 2.2])
-        plt.ylim([-2.2, 2.2])
-        plt.xticks([-2,0,2], fontsize=18)
-        plt.yticks([-2,0,2], fontsize=18)
+        plt.title(title_list[i], fontsize=19)
+        plt.xlim([-2., 2.])
+        plt.ylim([-2., 2.])
+        # plt.xticks([-2,0,2], fontsize=18)
+        # plt.yticks([-2,0,2], fontsize=18)
 
-    plt.subplot(grid[0,0])
-    plt.scatter(x[:, 0], x[:, 1], s=0.1, alpha=0.7, c=x_norm, label='Sphere sampling')
-    for traj in z_list:
-        plt.scatter(traj[0, 0], traj[0, 1], marker='.')
-        plt.plot(traj[:, 0], traj[:, 1], linewidth=1.8, alpha=0.8)
-    plt.scatter(traj[-1,0], traj[-1,1], marker='o', c='r')
-    plt.xlim([-1.5, 1.5])
-    plt.ylim([-1.5, 1.5])
-    plt.xticks([-1,0,1], fontsize=18)
-    plt.yticks([-1,0,1], fontsize=18)
-    plt.title(norm_tile, fontsize=char_size)
+    lines, lables = fig.axes[0].get_legend_handles_labels()
+    # lines1, labels1 = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, lables, fontsize=15, ncol=2, bbox_to_anchor=[0.76, 0.13], framealpha=1)
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12)
 
-    plt.subplots_adjust(wspace=0.15)
     seed = paras['seed']
     shape = paras['shape']
     dis_coff = paras['distortion_coefficient']
-    plt.savefig(instance_path+f'/pics/{constraints.__class__.__name__}_proj_traj_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
+    plt.savefig(instance_path+f'/pics/{str(constraints)}_proj_traj_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
+
+
+
+
+
+
+
 
 
 
@@ -390,10 +389,10 @@ def plot_ip_bp_loss(data, paras, instance_path, instance, n_dim, c_dim):
         fix_input = paras['fix_input']
         softmin = paras['softmin']
         softrange = paras['softrange']
-        instance = f'fix_{fix_input}_softmin_{softmin}_softrange_{softrange}_ip_{n_ip}'
+        minimum_ecc = paras['minimum_ecc']
+        instance = f'fix_{fix_input}_softmin_{softmin}_softrange_{softrange}_ip_{n_ip}_ecc_{minimum_ecc}'
         loss_list = np.load(instance_path + '/nns/loss_' + instance + '.npy', allow_pickle=True)
         total_iteration = paras['total_iteration']
-
         plt.subplot(1, 4, i+1)
         plt.scatter(np.arange(total_iteration), loss_list[1], label='Sample-based eccentricoty for IPs', marker='.', alpha=0.7,
                     c='royalblue')
@@ -402,7 +401,6 @@ def plot_ip_bp_loss(data, paras, instance_path, instance, n_dim, c_dim):
         plt.xticks(fontsize=14)
         plt.ylabel('Average eccentricity', fontsize=16)
         plt.yticks(fontsize=14)
-        # plt.xlim([-1.7, 1.7])
         plt.title(f'Training for IPNN {n_ip}', fontsize=18)
         plt.ylim([0, 2])
     lines, lables = fig.axes[0].get_legend_handles_labels()
@@ -416,7 +414,7 @@ def bp_interior_points(data, paras, instance_path, instance, n_dim, c_dim):
     IPs visualization
     """
     n_ip = paras['n_ip']
-    model = torch.load(instance_path + f'model_{instance}.pth', map_location=device)
+    model = torch.load(instance_path + f'model_{instance}.pth', map_location=data.device)
     if paras['fix_input']:
         c_sample = np.array([[0.5, 0.5, 2, 2, 2, 2, 1, 1]])
     else:
@@ -425,7 +423,7 @@ def bp_interior_points(data, paras, instance_path, instance, n_dim, c_dim):
                                      high=data.sampling_range[1],
                                      size=[4, c_dim])
 
-    c_tensor = torch.tensor(c_sample).to(device)
+    c_tensor = torch.tensor(c_sample).to(data.device)
     n_test = c_tensor.shape[0]
     plt.figure(figsize=[(n_test)*(4+0.2), 4])
     for i in range(n_test):
@@ -471,9 +469,9 @@ def plot_bp_traj_varying_ip(data, paras, instance_path, instance, n_dim, c_dim, 
     softmin = paras['softmin']
     softrange = paras['softrange']
     c_sample = data.fix_c
-    c_tensor = torch.tensor(c_sample).to(device)
+    c_tensor = torch.tensor(c_sample).to(data.device)
     # modified infeasible sampling method
-    x_tensor=data.sampling_infeasible(c_sample,err,density).to(device)
+    x_tensor=data.sampling_infeasible(c_sample,err,density).to(data.device)
 
     ip_list = [1,2,4,8]
     n_test = len(ip_list)
@@ -482,7 +480,7 @@ def plot_bp_traj_varying_ip(data, paras, instance_path, instance, n_dim, c_dim, 
     for i, n_ip in enumerate(ip_list):
         ct = c_tensor
         instance = f'fix_{fix_input}_softmin_{softmin}_softrange_{softrange}_ip_{n_ip}'
-        model = torch.load(instance_path  + f'/nns/model_{instance}.pth', map_location=device)
+        model = torch.load(instance_path  + f'/nns/model_{instance}.pth', map_location=data.device)
         # model = ResNet(data.c_dim, n_dim * n_ip, paras['n_hid'], paras['n_layer'], act=None).to(device)
         # model.load_state_dict(torch.load(instance_path + f'/nns/model_{instance}.pth', map_location=device))
         model.eval()
@@ -516,31 +514,22 @@ def plot_bp_traj_varying_ip(data, paras, instance_path, instance, n_dim, c_dim, 
     # plt.show()
     plt.close()
 
-def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_dim, err, density):
+def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_dim, err=0.2, density=10):
     """
     Bisection projection traj under different number of inputs
     """
     n_ip = paras['n_ip']
-    model = torch.load(instance_path + f'/nns/model_{instance}.pth', map_location=device)
+    model = torch.load(instance_path + f'/nns/model_{instance}.pth', map_location=data.device)
 
     if paras['fix_input']:
         c_sample = data.fix_c
     else:
-        np.random.seed(2024)
+        if 'Ball' in instance_path:
+            np.random.seed(2024)
+        else:
+            np.random.seed(2002)
         c = np.random.rand(3, c_dim)
         c_sample = c * (data.sampling_range[1] - data.sampling_range[0]) + data.sampling_range[0]
-
-    # if paras['fix_input']:
-    #     c_sample = np.array([[0.5, 0.5, 2, 2, 2, 2, 1, 1]])
-    # else:
-    #     np.random.seed(2000)
-    #     c_sample = np.random.uniform(low=data.sampling_range[0],
-    #                           high=data.sampling_range[1],
-    #                           size=[3, c_dim], )
-        # c_sample=np.array([[0.1, 0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        #                    [1.3, 0.1, 0.9211, 1.2651, 1.0, 0.6, 0.2, 0.3],
-        #                    [0.5,0.3,1.4,0.7,0.7,1.4,1.1,1.1]])
-    # [0.7, 1.4, 0.7, 0.7, 1.4, 1.4, 0.3, 0.1]
 
     n_test = c_sample.shape[0]
     fig = plt.figure(figsize=[(n_test)*(4+0.2), 4.2])
@@ -548,8 +537,8 @@ def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_di
     for i in range(n_test):
         ct = c_sample[[i]]
         # modified infeasible sampling method
-        x_tensor = data.sampling_infeasible(ct,err,density).to(device)
-        c_tensor = torch.as_tensor(ct).to(device).view(1,-1)
+        x_tensor = data.sampling_infeasible(ct,err,density).to(data.device)
+        c_tensor = torch.as_tensor(ct).to(data.device).view(1,-1)
         model.eval()
         with torch.no_grad():
             ip = model(c_tensor).view(-1, n_ip, n_dim)
@@ -562,7 +551,7 @@ def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_di
         # for j in range(x_infeasible.shape[0]):
         #     plt.plot([x_feasible[j, 0], ip_near[j, 0]],
         #              [x_feasible[j, 1], ip_near[j, 1]],  '--', linewidth=0.5, alpha=0.1, c='lightcoral')
-        plt.scatter(x_feasible[:, 0], x_feasible[:, 1], alpha=0.5, s=15, zorder=3, label='Bis. Projected points')
+        plt.scatter(x_feasible[:, 0], x_feasible[:, 1], alpha=0.5, s=15, zorder=3, label='Bis. Proj. points')
         plt.scatter(x_infeasible[:, 0], x_infeasible[:, 1], alpha=0.5, s=15, zorder=3, label='Infeasible points')
         plt.scatter(ip[:, 0], ip[:, 1], marker='*', c='crimson', zorder=3, label='Interior points')
         plt.xlim([-2., 2.])
@@ -586,18 +575,18 @@ def plot_illustration(paras, instance_path):
     c_sample = np.array([[0.2, 1]])
     ip_list = [[0.15, 0.95],[0,0],[[0, -0.6], [0,0] ,[0, 0.6]]]
     title_list = ['bad IP', 'MEIP', 'MEIPs']
-    c_tensor = torch.tensor(c_sample).to(device)
+    c_tensor = torch.tensor(c_sample).to(data.device)
     y = np.linspace(-1.2,1.2, 15)
     x = np.linspace(-0.4,0.4, 5)
     x_sample = [[xt,1.2] for xt in x] + [[xt,-1.2] for xt in x] + \
                [[0.4,yt] for yt in y] +  [[-0.4,yt] for yt in y]
     x_sample = np.reshape(np.array(x_sample), [-1,2])
-    x_tensor = torch.tensor(x_sample).to(device)
+    x_tensor = torch.tensor(x_sample).to(data.device)
     n_test = len(ip_list)
     fig = plt.figure(figsize=[(n_test)*(2.6+0.2), 4])
     for i, ip in enumerate(ip_list):
         ct = c_tensor
-        ip = torch.tensor(ip).to(device)
+        ip = torch.tensor(ip).to(data.device)
         x_infeasible, x_feasible, ip_near, ip = plot_bp_traj(data, ip, ct, x_tensor, paras)
         plt.subplot(1, n_test, i + 1)
         data.plot_boundary(ct.cpu().numpy())

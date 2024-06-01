@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .flows.iresblock import iResidualLayer, iGraphResidualLayer
-from .flows.coupling import LUInvertibleMM, ActNorm, CouplingLayer, MADE, Sigmoid
+from .flows.coupling import LUInvertibleMM, ActNorm, CouplingLayer, MADE, Sigmoid, Tanh, Con_ActNorm
 torch.set_default_dtype(torch.float64)
 
 
@@ -21,61 +21,62 @@ act_list = {'relu': nn.ReLU(), 'silu': nn.SiLU(), 'softplus': nn.Softplus(),
 ###################################################################
 # GNN: Graph based NN, ResNet
 ###################################################################
-class GraphLinear(nn.Module):
-    def __init__(self, num_node, adj, n_in, n_hid):
-        super().__init__()
-        self.adj = adj
-        self.num_node = num_node
-        self.linear = nn.Linear(n_in, n_hid)
-        self.adj = (self.adj + torch.eye(self.num_node, device=adj.device))
-        self.deg = (self.adj.sum(1)).view(1,self.num_node,1)
-    def forward(self, x):
-        """
-        x: batch * node * feature
-        adj: num_node * num_node
-        """
-        emb = torch.matmul(x.permute(0,2,1), self.adj)
-        emb = emb.permute(0,2,1) / self.deg
-        emb = self.linear(emb)
-        return emb
-
 class GraphResBlock(nn.Module):
-    def __init__(self, num_node, adj, n_in, n_hid):
+    def __init__(self, n_in, n_hid, ein=None):
         super().__init__()
-        self.adj = adj
-        self.num_node = num_node
-        self.net = nn.Sequential(nn.Linear(n_in, n_hid),
-                                 nn.ReLU(),
-                                 nn.Linear(n_hid, n_in))
-        self.adj = (self.adj + torch.eye(self.num_node, device=adj.device))
-        self.deg = (self.adj.sum(1)).view(1,self.num_node,1)
+        self.node_emb_f = nn.Sequential(nn.Linear(n_in, n_hid))
+        if ein is not None:
+            self.node_emb_t = nn.Sequential(nn.Linear(n_in, n_hid))
+            self.edge_emb = nn.Sequential(nn.Linear(ein, n_hid))
+        self.net = nn.Sequential(nn.Linear(n_hid, n_hid), nn.ReLU(), nn.Linear(n_hid, n_in))
 
-    def forward(self, x):
+    def forward(self, x, e=None, adj=None):
         """
         x: batch * node * feature
-        adj: num_node * num_node
+        e : batch * node * node * feature
+        adj: batch * num_node * num_node
         """
-        emb = torch.matmul(x.permute(0,2,1), self.adj)
-        emb = emb.permute(0,2,1) / self.deg
-        emb = self.net(emb)
+        num_node = x.shape[1]
+        diag_indices = torch.arange(num_node)
+        if e is not None:
+            node_emb_1 = self.node_emb_f(x)
+            node_emb_2 = self.node_emb_t(x)
+            node_emb = node_emb_1.unsqueeze(1) + node_emb_2.unsqueeze(2)
+            edge_emb = self.edge_emb(e)
+            edge_emb[:, diag_indices, diag_indices, :] = 0
+            node_emb[:, diag_indices, diag_indices, :] = 0
+            node_emb = torch.relu(edge_emb + node_emb).mean(2)
+        elif adj is not None:
+            node_emb = self.node_emb_f(x)
+            adj = adj.view(-1, num_node, num_node) + \
+                  torch.eye(num_node).view(1, num_node, num_node).to(x.device)
+            adj =  adj / adj.sum(2).view(-1, num_node, 1)
+            node_emb = torch.matmul(adj, node_emb)
+        else:
+            raise NotImplementedError
+        emb = self.net(node_emb)
         return emb + x
 
-class GraphFCNet(nn.Module):
-    def __init__(self, num_node, adj, nin, nout, nh, nl, act='sigmoid'):
+class GraphNet(nn.Module):
+    def __init__(self, nin, nout, nh, ein=None, nl=3, act='sigmoid'):
         super().__init__()
         act_list = {'relu': nn.ReLU(), 'silu': nn.SiLU(), 'softplus': nn.Softplus(),
                     'sigmoid':  nn.Sigmoid(), 'softmax': nn.Softmax(dim=-1)}
-        net = [nn.Linear(nin, nh), nn.ReLU()]
+        net = [nn.Linear(nin, nh)]
         for _ in range(nl):
-            # net += [GraphLinear(num_node, adj, nh, nh), nn.ReLU()]
-            net += [GraphResBlock(num_node, adj, nh, nh//2)]
+            net += [GraphResBlock(nh, nh//2, ein)]
         net.append(nn.Linear(nh, nout))
         if act is not None:
             net.append(act_list[act])
-        self.net = nn.Sequential(*net)
+        self.net = nn.ModuleList(net)
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, x, e=None, adj=None):
+        for layer in self.net:
+            if isinstance(layer, GraphResBlock):
+                x = layer(x, e, adj)
+            else:
+                x = layer(x)
+        return x
 
 
 ###################################################################
@@ -129,19 +130,20 @@ class INN(nn.Module):
     """ A sequence of invertible layers """
     def __init__(self, nin, nhid, cin, nl, inv='made', outact='sigmoid', bilip=False, lip=2):
         super().__init__()
-        mask = torch.zeros(size=[1, nin])
-        mask[:, :nin // 2] = 1
         flows = []
         for _ in range(nl):
-            flows += [ActNorm(nin), LUInvertibleMM(nin)]
+            flows += [LUInvertibleMM(nin), Con_ActNorm(nin, cin)]
             if inv == 'made':
                 flows.append( MADE(nin, nhid, cin, bilip=bilip, lip=lip) )
             elif inv == 'coupling':
-                flows.append( CouplingLayer(nin, nhid, mask, cin, bilip=bilip, lip=lip) )
+                flows.append( CouplingLayer(nin, nhid, cin, bilip=bilip, lip=lip) )
             elif inv == 'residual':
                 flows.append( iResidualLayer(nin, nhid, cin) )
+        flows += [LUInvertibleMM(nin), Con_ActNorm(nin, cin)]
         if outact == 'sigmoid':
-            flows += [ActNorm(nin), LUInvertibleMM(nin), Sigmoid()]
+            flows += [Sigmoid()]
+        if outact == 'tanh':
+            flows += [Tanh()]
         self.flows = nn.ModuleList(flows)
         self.con_emb = None
 
@@ -154,12 +156,14 @@ class INN(nn.Module):
             if self.con_emb is not None:
                 c = self.con_emb(c)
             for flow in self.flows:
+                # if flow.__class__.__name__ == 'iResidualLayer':
+                #     x, ld = flow.forward(x, c)
+                # else:
                 x, ls = flow.forward(x, c)
                 ld = ls.sum(-1)
                 dis = torch.max(ls,-1)[0] - torch.min(ls,-1)[0]
                 log_det += ld.view(-1)
                 log_dis += dis.view(-1)
-                # print(flow.__class__.__name__, ld.mean())
         else:
             log_det = log_dis = None
             for flow in self.flows:
@@ -189,42 +193,49 @@ class INN(nn.Module):
 # G-INN
 ###################################################################
 class GINN(nn.Module):
-    def __init__(self, adj, nin, nhid, cin, nl, outact=None):
+    def __init__(self, num_node, nin, nhid, cin, ein,  nl, outact=None):
         super().__init__()
-        self.num_node = adj.shape[1]
         flows = []
         for _ in range(nl):
-            flows += [ActNorm(nin), LUInvertibleMM(nin)]
-            flows += [iGraphResidualLayer(adj, nin, nhid, cin)]
+            flows += [LUInvertibleMM(nin), ActNorm(nin)]
+            flows += [iGraphResidualLayer(num_node, nin, nhid, cin, ein)]
+        flows += [LUInvertibleMM(nin), ActNorm(nin)]
         if outact == 'sigmoid':
-            flows += [ActNorm(nin), LUInvertibleMM(nin), Sigmoid()]
+            flows += [Sigmoid()]
         self.flows = nn.ModuleList(flows)
 
-    def forward(self, x, c):
+    def forward(self, x, c, e, adj):
+        num_node = x.shape[1]
         x = x.view(-1, x.shape[-1])
-        c = c.view(-1, c.shape[-1])
-        be = x.shape[0]
-        if self.training:
-            log_det = torch.zeros(be).to(x.device)
-            log_dis = torch.zeros(be).to(x.device)
-            for flow in self.flows:
-                x, ls = flow.forward(x, c)
-                ld = ls.sum(-1)
+        if c is not None:
+            c = c.view(-1, c.shape[-1])
+        log_det = 0
+        log_dis = 0
+        for flow in self.flows:
+            if isinstance(flow, iGraphResidualLayer):
+                x, ls = flow.forward(x, c, e, adj)
+                dis = 0
+            else:
+                x, ls = flow.forward(x)
                 dis = torch.max(ls, -1)[0] - torch.min(ls, -1)[0]
-                log_det += ld.view(-1)
-                log_dis += dis.view(-1)
-        else:
-            log_det = log_dis = None
-            for flow in self.flows:
-                x, _ = flow.forward(x, c)
-        x = x.view(-1, self.num_node, x.shape[-1])
+            if self.training:
+                ld = ls.sum(-1)
+                log_det += ld
+                log_dis += dis
+            else:
+                log_det = log_dis = None
+        x = x.view(-1, num_node, x.shape[-1])
         return x, log_det, log_dis
 
-    def inverse(self, z, c):
+    def inverse(self, z, c, adj):
         z = z.view(-1, z.shape[-1])
-        c = c.view(-1, c.shape[-1])
+        if c is not None:
+            c = c.view(-1, c.shape[-1])
         for flow in self.flows[::-1]:
-            z, _ = flow.forward(z, c, mode='inverse')
+            if isinstance(flow, iGraphResidualLayer):
+                z, _ = flow.forward(z, c, adj, mode='inverse')
+            else:
+                z, _ = flow.forward(z, mode='inverse')
         z = z.view(-1, self.num_node, z.shape[-1])
         return z, None, None
 
