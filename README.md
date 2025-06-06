@@ -14,14 +14,6 @@ Run BP_toy_example.py to visualize MEIPs predictions and BP trajectory with MEIP
 
 Run training_all.py to train NN predictor, IPNN for MEIPs and BP for infeasible predictions.
 
-#### IPNN Verification
-
-1. IPNN Verification for Convex constraint.
-2. IPNN Verification for Non-convex constraint.
-
-Run test_verification.py to verify the worst-case constraint violation for IPNN (Gurobi licence required)
-
-
 
 
 
