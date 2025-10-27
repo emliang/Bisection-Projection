@@ -14,10 +14,9 @@ def config():
     
     # Basic configuration parameters
     defaults['predType'] = ['NN', 'NN_Eq'][1]  # Neural Network prediction type
-    defaults['projType'] = ['None', 'WS', 'Proj', 'D_Proj', 'H_Proj', 'B_Proj'][4]  # Projection method
+    defaults['projType'] = ['None', 'WS', 'Proj', 'D_Proj', 'H_Proj', 'B_Proj'][5]  # Projection method
     defaults['probType'] = ['qp', 'convex_qcqp', 'socp', 'sdp',            # Convex benchmarks
-                           'acopf', 'jccim',                               # Non-convex benchmarks
-                           'graph_qp', 'power_control', 'graph_acopf'][4]  # Graph benchmarks
+                           'acopf', 'jccim'][0]  #
     defaults['SA'] = False
     # Problem size configurations for different problem types
     defaults['probSize'] = {
@@ -27,9 +26,6 @@ def config():
         'sdp': [1600, 40, 40, 10000],
         'acopf': [793, 10000],
         'jccim': [400, 100, 100, 10000, 100],
-        'graph_qp': [100, 50, 50, 10000, 10, 0.5, 0],
-        'power_control': [10, 10000],
-        'graph_acopf': [118, 10000]
     }[defaults['probType']]
     
     # General testing parameters
@@ -37,30 +33,9 @@ def config():
     defaults['saveAllStats'] = False
     defaults['seed'] = 2023
 
-    # INN (Invertible Neural Network) parameters
-    defaults['inn_para'] = {
-        'training': False,          # Training mode flag
-        'n_samples': 100000,       # Number of normal samples
-        'c_samples': 10000,       # Number of constraint samples
-        'center': 0,               # Center of initial ball
-        'scale_ratio': 1,          # Scaling ratio
-        'total_iteration': 10000,  # Total training iterations
-        'batch_size': 256,         # Batch size for training
-        'lr': 1e-4,               # Learning rate
-        'lr_decay': 0.9,          # Learning rate decay factor
-        'lr_decay_step': 1000,    # Steps between learning rate decay
-        'num_layer': 3,           # Number of network layers
-        'inv_type': 'made',       # Invertible network type
-        'bilip': True,            # Bilipschitz flag
-        'L': 2,                   # Lipschitz constant
-        'w_penalty': 1,          # Weight for penalty term
-        'w_distortion': 1,         # Weight for distortion term
-        'resultsSaveFreq': 1000  # Frequency of saving results
-    }
-
     # Neural Network parameters
     defaults['nn_para'] = {
-        'training': False,         # Training mode flag
+        'training': True,         # Training mode flag
         'testing': True,          # Testing mode flag
         'approach': 'supervise',  # Training approach
         'total_iteration': 10000, # Total training iterations
@@ -107,17 +82,5 @@ def config():
         'corrMomentum': 0.5,      # Correction momentum
     }
 
-    # # PFNN (Power Flow Neural Network) parameters
-    # defaults['pfnn_para'] = {
-    #     'training': False,         # Training mode flag
-    #     'testing': False,         # Testing mode flag
-    #     'total_iteration': 10000, # Total training iterations
-    #     'batch_size': 64,         # Batch size for training
-    #     'pre_training': 10000,    # Pre-training iterations
-    #     'num_layer': 4,           # Number of network layers
-    #     'lr': 5e-4,              # Learning rate
-    #     'lr_decay': 0.9,         # Learning rate decay factor
-    #     'lr_decay_step': 1000    # Steps between learning rate decay
-    # }
 
     return defaults

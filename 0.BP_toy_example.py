@@ -1,10 +1,9 @@
-from utils.nn_utils import ResNet
-from utils.toy_utils import *
-from utils.training_utils import unsupervised_training_meip
-from utils.visualization import *
-
-
-
+import os
+import numpy as np
+import torch
+from utils.nn_utils import ResNet, NoiseResNet
+from utils.toy_utils import Complex_Constraints, Disconnected_Ball, RingSet
+from utils.training_utils import unsupervised_training_meip, DEVICE
 
 def __main__():
     paras = {'constraint':  Complex_Constraints(), #Disconnected_Ball(), #

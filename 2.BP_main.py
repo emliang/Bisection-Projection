@@ -11,40 +11,6 @@ def train_all():
     """
     args = config()
 
-    # args['probType'] = 'qp'
-    # args['probSize'] = [400, 100, 100, 10000]
-    # run_instance(args)
-    #
-    # args['probType'] = 'convex_qcqp'
-    # args['probSize'] = [400, 100, 100, 10000]
-    # run_instance(args)
-    #
-    # args['probType'] = 'socp'
-    # args['probSize'] = [400, 100, 100, 10000]
-    # run_instance(args)
-    # #
-    # args['probType'] = 'sdp'
-    # args['probSize'] = [1600, 40, 40, 10000]
-    # run_instance(args)
-    # #
-    args['probType'] = 'acopf'
-    # args['probSize'] = [30, 10000]
-    # run_instance(args)
-    # args['probSize'] = [57, 10000]
-    # run_instance(args)
-    # args['probSize'] = [118, 10000]
-    # run_instance(args)
-    # args['probSize'] = [200, 10000]
-    # run_instance(args)
-    args['probSize'] = [793, 10000]
-    run_instance(args)
-    # #
-    # args['probType'] = 'jccim'
-    # # args['probSize'] = [400, 100, 100, 10000, 10]
-    # # run_instance(args)
-    # args['probSize'] = [400, 100, 100, 10000, 100]
-    # run_instance(args)
-
 
 
 def load_instance(args):
@@ -138,11 +104,7 @@ def run_instance(args):
     Load data
     """
     data, result_save_dir, model_save_dir = load_instance(args)
-    """
-    Run homeomorphic mapping
-    """
-    if args['inn_para']['training']:
-        train_mdh_mapping(data, args, model_save_dir)
+
     """
     Run IPNN
     """
@@ -152,11 +114,6 @@ def run_instance(args):
     """
     Run neural network solver
     """
-    # for pred,approach in [['NN_Eq', 'supervise']
-    #                       ]:
-        # ['NN_Eq', 'unsupervise']
-        # args['predType']` = pred
-        # args['nn_para'][`'approach'] = approach
     data, result_save_dir, model_save_dir = load_instance(args)
     if args['nn_para']['training']:
         train_nn_solver(data, args, model_save_dir)
@@ -237,7 +194,7 @@ def sensitivity_analysis():
     # Common parameters
     args['ipnn_para'].update({
         'training': True,
-        'pre_training': 10000,
+        'pre_training': 0,
         'total_iteration': 10000,
         'batch_size': 64,
         'learning_rate': 1e-4,

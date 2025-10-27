@@ -65,29 +65,12 @@ def train_nn_solver(data, args, save_dir):
     Ytest = data.testY.squeeze().to(DEVICE)
     training_time_list = []
     total_time = 0
-    """
-    pre-training
-    """
-    if training_approach == 'supervise':
-        _pretrain(model, data, Xtrain, Ytrain, args['nn_para'], batch_size)
-    # for pn in range(pre_training):
-        #     batch_index = np.random.choice(np.arange(Xtrain.shape[0]), 32, replace=False)
-        #     # Get train loss
-        #     Xtrain_batch = Xtrain[batch_index]
-        #     Ytrain_batch = Ytrain[batch_index]
-        #     Z_pred_batch = model(Xtrain_batch)
-        #     Z_pred_scale_batch = data.scale(Xtrain_batch, Z_pred_batch)
-        #     if 'Eq' in args['algoType']:
-        #         mse_loss = loss(Z_pred_scale_batch, Ytrain_batch[:, data.partial_vars_idx]).sum(-1).mean()
-        #     else:
-        #         mse_loss = loss(Z_pred_scale_batch, Ytrain_batch).sum(-1).mean()
-        #     mse_loss.backward()
-        #     if pn % 1000 == 0:
-        #         print('Pre-training loss', pn, mse_loss.mean(), end='\r')
-        #     solver_opt.step()
-        #     solver_shce.step()
-        #     solver_opt.zero_grad()
-
+    # """
+    # pre-training
+    # """
+    # if training_approach == 'supervise':
+    #     _pretrain(model, data, Xtrain, Ytrain, args['nn_para'], batch_size)
+ 
     for i in range(nepochs + 1):
         epoch_stats = {}
         iter_st = time.time()
@@ -1003,22 +986,22 @@ def unsupervised_training_meip(IPNN, data, args, save_dir,seed=2023, input_tenso
 
                 print(f'iteration: {n}, penalty: {penalty_mean.cpu().numpy().mean():.4f}, ',
                       f'feasibility: {(penalty_max <  1e-5).cpu().numpy().mean():.4f},',
-                      f'gamma: {metrics["gamma"][-1]:.4f}, ')
+                      f'log-gamma: {metrics["gamma"][-1]:.4f}, ')
                 torch.save(IPNN, os.path.join(save_dir, f'ipnn_{training_sample}_{fixed_margin}_{gamma}.pth'))
 
-    IPNN.eval()
-    with torch.no_grad():
-        # torch.manual_seed(seed)
-        # input_batch = torch.rand([4096, input_batch.shape[1]]).to(DEVICE)
-        input_batch = data.testX
-        input_batch = input_batch * (data.input_U - data.input_L) + data.input_L
-        ip_batch = IPNN(input_batch)
-        zt_scale = data.scale(input_batch, ip_batch)
-        yt_full = data.complete_partial(input_batch, zt_scale)
-        ineq_vio = data.ineq_resid(input_batch, yt_full)
-        penalty_max = torch.max(torch.abs(ineq_vio), dim=-1)[0]
-        ip_valid_rate = (penalty_max <= 1e-5).sum() / penalty_max.shape[0]
-        print(f'ip_valid_rate: {ip_valid_rate:.4f}')
+    # IPNN.eval()
+    # with torch.no_grad():
+    #     # torch.manual_seed(seed)
+    #     # input_batch = torch.rand([4096, input_batch.shape[1]]).to(DEVICE)
+    #     input_batch = data.testX
+    #     input_batch = input_batch * (data.input_U - data.input_L) + data.input_L
+    #     ip_batch = IPNN(input_batch)
+    #     zt_scale = data.scale(input_batch, ip_batch)
+    #     yt_full = data.complete_partial(input_batch, zt_scale)
+    #     ineq_vio = data.ineq_resid(input_batch, yt_full)
+    #     penalty_max = torch.max(torch.abs(ineq_vio), dim=-1)[0]
+    #     ip_valid_rate = (penalty_max <= 1e-5).sum() / penalty_max.shape[0]
+    #     print(f'ip_valid_rate: {ip_valid_rate:.4f}')
 
     training_record = {
         'perturbed_penalty_loss': np.stack([metrics['penalty'], metrics['gamma']]),
@@ -1028,8 +1011,8 @@ def unsupervised_training_meip(IPNN, data, args, save_dir,seed=2023, input_tenso
             metrics['max_boundary_dist'],
             metrics['min_boundary_dist'] ]),
         'valid_rate_list': metrics['valid_rate'],
-        'training_time_list': metrics['training_time'],
-        'ip_valid_rate': ip_valid_rate.detach().cpu().numpy()}
+        'training_time_list': metrics['training_time']}
+        # 'ip_valid_rate': ip_valid_rate.detach().cpu().numpy()}
     return IPNN, training_record
 
 def train_meip_mapping(data, args, save_dir):
