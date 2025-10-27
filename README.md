@@ -5,7 +5,7 @@ A neural network-based approach for constrained optimization problems that train
 ## Overview
 
 The method consists of two main phases:
-- **Training**: Train a neural network to predict interior points with maximized margin to the constrained boundary
+- **Training**: Train a neural network (IPNN) to predict interior points with maximized margin to the constrained boundary
 - **Inference**: Use bisection between the predicted interior points and input infeasible points to find feasible projections
 
 ## Main Scripts
@@ -14,7 +14,7 @@ The method consists of two main phases:
 Trains a neural network on 2D toy constraint problems for demonstration and experimentation.
 
 **Key features:**
-- Uses simple 2D constraint sets (Complex_Constraints, Disconnected_Ball, RingSet)
+- Uses simple 2D constraint sets (Complex_Constraints, Disconnected_Ball)
 - Trains NoiseResNet model with unsupervised learning
 - Configurable parameters for margin, learning rate, and network architecture
 - Saves trained models and training records
@@ -43,16 +43,15 @@ Main script handling real optimization problems with comprehensive training, tes
 
 **Supported problem types:**
 - Quadratic Programming (QP)
-- Quadratically Constrained Quadratic Programming (QCQP)  
+- Convex Quadratically Constrained Quadratic Programming (QCQP)  
 - Second-Order Cone Programming (SOCP)
 - Semidefinite Programming (SDP)
 - AC Optimal Power Flow (ACOPF)
-- Joint Chance-Constrained Individual Margin (JCCIM)
+- Joint Chance-Constrained Inventory Management (JCCIM)
 
 **Key functions:**
 - `train_all()`: Train models on multiple problem types
 - `test_all()`: Comprehensive testing and evaluation
-- `sensitivity_analysis()`: Parameter sensitivity studies
 
 **Usage:**
 ```bash
