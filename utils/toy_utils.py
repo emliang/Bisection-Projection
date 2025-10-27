@@ -21,9 +21,9 @@ class Complex_Constraints:
         #                 [1.5, 0.5, 1.5, 1.5, 0.5, 0.5],
         #                 [0.5, 1.5, 0.5, 0.5, 1.5, 0.5],
         #                 [0.5, 0.5, 1.5, 1.5, 1.5, 0.5]]
-        # self.sampling_range = np.array([[-0.01,-0.01,1,1,1,1,-1,-1], [2,2,1,1,1,1,1,1]])
+        # self.sampling_range = np.array([[-0.1,-0.1,1,1,1,1,-1,-1], [2,2,1,1,1,1,1,1]])
         self.fix_c = np.reshape(np.array([[0.5, 0.5, 2, 2, 2, 2, 1, 1]]), (1,-1))
-        self.sampling_range = [0.01,2]
+        self.sampling_range = [0.2,2]
         self.c_dim = 6 + 2
         self.n_dim = 2
         self.n_case = 8
@@ -31,8 +31,19 @@ class Complex_Constraints:
                                         high=self.sampling_range[1],
                                         size=[self.n_case,self.c_dim])
 
+
     def __str__(self):
         return f'Quadratic_Set'
+
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
 
     def cal_penalty(self, c, x):
         res = self.ineq_resid(c, x)
@@ -48,7 +59,7 @@ class Complex_Constraints:
         violation_1 = (-c[:,[6]] * (x[:, [0]]) ** 2 + x[:, [1]] - c[:, [0]])
         violation_2 = (-c[:,[7]] * (x[:, [0]]) ** 2 - x[:, [1]] - c[:, [1]])
         violation = torch.cat([violation, violation_1, violation_2], dim=-1)
-        return violation
+        return torch.clamp(violation, min=0)
 
     def check_feasibility(self, c, x):
         return self.cal_penalty(c, x)
@@ -107,13 +118,14 @@ class Complex_Constraints:
         x_tensor = torch.as_tensor(samples).to(self.device).view(-1,2)
         penalty = self.cal_penalty(c_tensor, x_tensor).sum(-1).cpu().numpy()
         feasible_sample = samples[penalty<=1e-5]
-        plt.scatter(feasible_sample[:,0],feasible_sample[:,1], marker='.', alpha=0.9,
-                    zorder=0, c='whitesmoke', linewidths=0)
+        
+        plt.scatter(feasible_sample[:,0],feasible_sample[:,1], marker='o', alpha=0.99,
+                    zorder=1, c='whitesmoke', linewidths=0)
 
         ### plot the boudanry
-        boundary = self.sampling_boudanry(c, 3000)
-        plt.scatter(boundary[:,0], boundary[:,1], alpha=0.7,
-                    zorder=0, c='cornflowerblue', marker='.', s=3, linewidths=0)
+        # boundary = self.sampling_boudanry(c, 3000)
+        # plt.scatter(boundary[:,0], boundary[:,1], alpha=0.7,
+        #             zorder=0, c='cornflowerblue', marker='.', s=3, linewidths=0)
 
 
 #################################################################
@@ -127,34 +139,45 @@ class Disconnected_Ball:
         self.sampling_range = [0.01,2]
         self.center_range = [-1, 1]
         self.radius_range = [0.3,0.7]
-        self.n_ball = n_ball
+        self.n_ball = 4
         self.c_dim = self.n_ball * 3 #[center, radius]
         self.n_dim = 2
         self.fix_c = np.array([[1, 1, -1, 1, 1, -1, -1, -1, 1, 1, 1, 1]])
-        self.sampling_range = np.array([[0,0,-1, 0,-1,-1, 0,-1, 0.4, 0.4, 0.4, 0.4] ,
-                                        [1,1, 0, 1, 0, 0, 1, 0, 0.7, 0.7, 0.7, 0.7]])
-
-        # self.sampling_range = np.zeros([2,n_ball*3])
-        # self.sampling_range[0,:2*n_ball] = -1
-        # self.sampling_range[1,:2*n_ball] = 1
-        # self.sampling_range[0,2*n_ball:] = 0.3
-        # self.sampling_range[1,2*n_ball:] = 0.6
+        # self.sampling_range = np.array([[0,0,-1, 0,-1,-1, 0,-1, 0.5, 0.5, 0.5, 0.5] ,
+        #                                 [1,1, 0, 1, 0, 0, 1, 0, 0.7, 0.7, 0.7, 0.7]])
+        # self.sampling_range = np.array([[0,0,,-1,-1, 0.4, 0.4] ,
+        #                                 [1,1, 0, 1, 0, 0,  0.7, 0.7]])
+        self.sampling_range = np.zeros([2,n_ball*3])
+        self.sampling_range[0,:2*n_ball] = -1
+        self.sampling_range[1,:2*n_ball] = 1
+        self.sampling_range[0,2*n_ball:] = 0.5
+        self.sampling_range[1,2*n_ball:] = 0.7
 
     def __str__(self):
         return f'Union_Ball_{self.n_ball}'
 
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
+
     def cal_penalty(self, c, x):
-        res = self.cal_res(c, x)
+        res = self.ineq_resid(c, x)
         return torch.clamp(res, min=0)
 
-    def cal_res(self, c, x):
+    def ineq_resid(self, c, x):
         batch = c.shape[0]
         center = c[:, : self.n_ball * 2].view(batch, self.n_ball, -1) 
         radius = c[:, self.n_ball * 2 :].view(batch, self.n_ball) 
         x = x.view(batch, 1, -1)
         residual = torch.norm(x - center, dim=-1, p=2) - radius
         residual = torch.min(residual, dim=1, keepdim=True)[0] # batch * 1
-        return residual
+        return torch.clamp(residual, min=0)
 
     def check_feasibility(self, c, x):
         return self.cal_penalty(c, x)
@@ -209,8 +232,8 @@ class Disconnected_Ball:
             samples = [[center_i[0] + np.cos(x) * y,
                         center_i[1] + np.sin(x) * y] for x in theta for y in rt]
             samples = np.array(samples)
-            plt.scatter(samples[:,0],samples[:,1], marker='.', alpha=0.9,
-                    zorder=0, c='whitesmoke', linewidths=0)
+            plt.scatter(samples[:,0],samples[:,1], marker='.', alpha=0.99,
+                    zorder=1, c='whitesmoke', linewidths=0)
 
         ### plot the boudanry
         # for i in range(self.n_ball):
@@ -224,6 +247,77 @@ class Disconnected_Ball:
 
 
 
+class RingSet():
+    def __init__(self, inner_radius=0.5, outer_radius=1.0):
+        self.inner_radius = inner_radius
+        self.outer_radius = outer_radius
+        self.n_dim = 2
+        self.c_dim = 2
+        self.sampling_range = [0.01, 2]
+        self.fix_c = np.array([[0.5, 1]])
+        self.device = None
+        
+
+    def __str__(self):
+        return f'Ring'
+
+    def to_device(self, device):
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
+
+    def cal_penalty(self, c, x):
+        return self.ineq_resid(c, x)
+    
+    def ineq_resid(self, c, x):
+        vio_1 =  self.inner_radius - torch.norm(x, dim=-1, keepdim=True)
+        vio_2 = torch.norm(x, dim=-1, keepdim=True) - self.outer_radius 
+        vio = torch.cat([vio_1, vio_2], dim=-1)
+        vio = torch.clamp(vio, min=0)
+        return vio.view(-1,2)
+        
+    def check_feasibility(self, c, x):
+        return self.cal_penalty(c, x)
+        
+    def scale(self, c, x):
+        return x
+    
+    def complete_partial(self, c, x):
+        return x    
+
+    def sampling_boudanry(self, c, density):
+        ### plot the boudanry
+        theta = np.linspace(0, 2 * np.pi, density)
+        inner_circle = np.stack([self.inner_radius * np.cos(theta), self.inner_radius * np.sin(theta)], axis=1)
+        outer_circle = np.stack([self.outer_radius * np.cos(theta), self.outer_radius * np.sin(theta)], axis=1)
+        return np.concatenate([inner_circle, outer_circle], axis=0)
+    
+    def sampling_infeasible(self, c=None, err=0.2, density=10):
+        theta = np.linspace(0, 2 * np.pi, density)
+        infeasible_samples = np.stack([(self.outer_radius+err) * np.cos(theta), 
+                                       (self.outer_radius+err) * np.sin(theta)], axis=1)
+        return torch.tensor(infeasible_samples[:-1])
+    
+    def plot_boundary(self, c):
+        theta = np.linspace(0, 2 * np.pi, 10000)
+        inner_circle = np.array([self.inner_radius * np.cos(theta), self.inner_radius * np.sin(theta)])
+        outer_circle = np.array([self.outer_radius * np.cos(theta), self.outer_radius * np.sin(theta)]) 
+        plt.plot(inner_circle[0], inner_circle[1], 'k-', linewidth=1.5, alpha=0.7, c='cornflowerblue')
+        plt.plot(outer_circle[0], outer_circle[1], 'k-', linewidth=1.5, alpha=0.7, c='cornflowerblue')
+
+    def fill_constraint(self, c):
+        theta = np.linspace(0, 2 * np.pi, 300000)
+        radius = np.random.uniform(low=self.inner_radius, high=self.outer_radius, size=300000)
+        feasible_sample = np.stack([radius * np.cos(theta), radius * np.sin(theta)], axis=1)
+        plt.scatter(feasible_sample[:,0],feasible_sample[:,1], marker='.', alpha=0.99,
+                    zorder=1, c='whitesmoke', linewidths=0)
+
+ 
+
 
 
 class Convex_Constraints:
@@ -231,21 +325,33 @@ class Convex_Constraints:
         """
         Ax - b <= 0
         """
-        self.A = torch.tensor(np.array([[1, -1], [-1, -1], [1, 1], [-1, 1]])).permute(1, 0)
-        self.b = torch.tensor(np.array([2, 2, 2, 2])).view(1, 4)
+        self.A = torch.as_tensor(np.array([[1.0, -1.0], [-1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]])).permute(1, 0)
+        self.b = torch.as_tensor(np.array([2.0, 2.0, 2.0, 2.0])).view(1, 4)
 
         self.t_test = [[0.3, 0.3, 0.3, 0.3], [0.3, 0.3, 1.7, 1.7], [1.7, 1.7, 0.3, 1.7], [1.7, 1.7, 1.7, 1.7]]
-        self.sampling_range = [0, 2]
+        self.sampling_range = [0.2, 2]
         self.c_dim = 4
 
-    def forward(self, x):
-        violation = torch.matmul(x, self.A) - (self.b)
+    def __str__(self):
+        return f'Convex_Set'
 
-        return violation
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
 
     def cal_penalty(self, c, x):
         violation = torch.matmul(x, self.A) - c
         return torch.clamp(violation, 0)
+
+    def ineq_resid(self, c, x):
+        violation = torch.matmul(x, self.A) - c
+        return torch.clamp(violation, min=0)
 
     def check_feasibility(self, c, x):
         return self.cal_penalty(c, x)
@@ -274,6 +380,16 @@ class Non_Convex_Constraints:
         self.t_test = [[1.5, 1.5], [1.5, 0.2], [0.2, 1.5], [0.2, 0.2]]
         self.sampling_range = [0, 2]
         self.c_dim = 2
+
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
 
     def cal_penalty(self, c, x):
         """

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .flows.iresblock import iResidualLayer, iGraphResidualLayer
-from .flows.coupling import LUInvertibleMM, ActNorm, CouplingLayer, MADE, Sigmoid, Tanh, Con_ActNorm
+from .flows.coupling import *
 torch.set_default_dtype(torch.float64)
 
 
@@ -19,68 +19,7 @@ act_list = {'relu': nn.ReLU(), 'silu': nn.SiLU(), 'softplus': nn.Softplus(),
             'sigmoid': nn.Sigmoid(), 'softmax': nn.Softmax(dim=-1), 'clip': Clip()}
 
 ###################################################################
-# GNN: Graph based NN, ResNet
-###################################################################
-class GraphResBlock(nn.Module):
-    def __init__(self, n_in, n_hid, ein=None):
-        super().__init__()
-        self.node_emb_f = nn.Sequential(nn.Linear(n_in, n_hid))
-        if ein is not None:
-            self.node_emb_t = nn.Sequential(nn.Linear(n_in, n_hid))
-            self.edge_emb = nn.Sequential(nn.Linear(ein, n_hid))
-        self.net = nn.Sequential(nn.Linear(n_hid, n_hid), nn.ReLU(), nn.Linear(n_hid, n_in))
-
-    def forward(self, x, e=None, adj=None):
-        """
-        x: batch * node * feature
-        e : batch * node * node * feature
-        adj: batch * num_node * num_node
-        """
-        num_node = x.shape[1]
-        diag_indices = torch.arange(num_node)
-        if e is not None:
-            node_emb_1 = self.node_emb_f(x)
-            node_emb_2 = self.node_emb_t(x)
-            node_emb = node_emb_1.unsqueeze(1) + node_emb_2.unsqueeze(2)
-            edge_emb = self.edge_emb(e)
-            edge_emb[:, diag_indices, diag_indices, :] = 0
-            node_emb[:, diag_indices, diag_indices, :] = 0
-            node_emb = torch.relu(edge_emb + node_emb).mean(2)
-        elif adj is not None:
-            node_emb = self.node_emb_f(x)
-            adj = adj.view(-1, num_node, num_node) + \
-                  torch.eye(num_node).view(1, num_node, num_node).to(x.device)
-            adj =  adj / adj.sum(2).view(-1, num_node, 1)
-            node_emb = torch.matmul(adj, node_emb)
-        else:
-            raise NotImplementedError
-        emb = self.net(node_emb)
-        return emb + x
-
-class GraphNet(nn.Module):
-    def __init__(self, nin, nout, nh, ein=None, nl=3, act='sigmoid'):
-        super().__init__()
-        act_list = {'relu': nn.ReLU(), 'silu': nn.SiLU(), 'softplus': nn.Softplus(),
-                    'sigmoid':  nn.Sigmoid(), 'softmax': nn.Softmax(dim=-1)}
-        net = [nn.Linear(nin, nh)]
-        for _ in range(nl):
-            net += [GraphResBlock(nh, nh//2, ein)]
-        net.append(nn.Linear(nh, nout))
-        if act is not None:
-            net.append(act_list[act])
-        self.net = nn.ModuleList(net)
-
-    def forward(self, x, e=None, adj=None):
-        for layer in self.net:
-            if isinstance(layer, GraphResBlock):
-                x = layer(x, e, adj)
-            else:
-                x = layer(x)
-        return x
-
-
-###################################################################
-# NN: FC-MLP, ResNet
+# FNN: FC-MLP, ResNet
 ###################################################################
 class FCNet(nn.Module):
     def __init__(self, nin, nout, nh, nl, act='sigmoid'):
@@ -96,14 +35,21 @@ class FCNet(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class ResBlock(nn.Module):
+    def __init__(self, n_in, n_hid):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(n_in, n_hid),
+                                 nn.ReLU(),
+                                 nn.Linear(n_hid, n_in),)
+    def forward(self, x):
+        return x + self.net(x)
 
 class ResNet(nn.Module):
     def __init__(self, nin, nout, nh, nl, act='sigmoid'):
         super().__init__()
         net = [nn.Linear(nin, nh)]
         for _ in range(nl):
-            # net.append(ResBlock(nh, nh//2))
-            net += [ResBlock(nh, min(nh//2, 1024))]
+            net += [ResBlock(nh, nh), nn.Dropout(0.1)]
         net.append(nn.Linear(nh, nout))
         if act is not None:
             net.append(act_list[act])
@@ -112,15 +58,42 @@ class ResNet(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
-class ResBlock(nn.Module):
-    def __init__(self, n_in, n_hid):
+class NoiseResNet(nn.Module):
+    def __init__(self, nin, nout, nh, nl, act='sigmoid', fixed_margin=False, gamma=0, noise_type='add'):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(n_in, n_hid),
-                                 nn.ReLU(),
-                                 nn.Linear(n_hid, n_in))
+        net = [nn.Linear(nin, nh)]
+        for _ in range(nl):
+            net += [ResBlock(nh, nh), nn.Dropout(0.1)]
+        net.append(nn.Linear(nh, nout))
+        if gamma>0:
+            net.append(NoiseModule(fixed_margin, gamma, noise_type))
+        if act is not None:
+            net.append(act_list[act])
+        self.net = nn.Sequential(*net)
+
     def forward(self, x):
-        return x + self.net(x)
+        return self.net(x)
+
+
+class NoiseModule(nn.Module):
+    def __init__(self, fixed_margin, gamma, noise_type='add'):
+        super().__init__()
+        # Parameterize gamma in log-space to ensure positivity
+        log_gamma = torch.log(torch.tensor(gamma))
+        self.log_gamma = log_gamma if fixed_margin else nn.Parameter(log_gamma)
+        self.noise_type = noise_type
+
+    def forward(self, x):
+        if self.training:
+            noise = torch.randn_like(x)
+            gamma = torch.exp(self.log_gamma)
+
+            if self.noise_type == 'add':
+                x = x + noise.detach() * gamma
+            else:  # 'mul'
+                x = x * (1 + noise.detach() * gamma)
+        return x
+
 
 
 ###################################################################
@@ -141,7 +114,7 @@ class INN(nn.Module):
                 flows.append( iResidualLayer(nin, nhid, cin) )
         flows += [LUInvertibleMM(nin), Con_ActNorm(nin, cin)]
         if outact == 'sigmoid':
-            flows += [Sigmoid()]
+            flows += [ModifiedSigmoid()]
         if outact == 'tanh':
             flows += [Tanh()]
         self.flows = nn.ModuleList(flows)
@@ -186,6 +159,67 @@ class INN(nn.Module):
         for flow in self.flows[::-1]:
             z, _ = flow.forward(z, c, mode='inverse')
         return z, None, None
+
+
+
+
+
+###################################################################
+# GNN: Graph based NN, ResNet
+###################################################################
+class GraphResBlock(nn.Module):
+    def __init__(self, n_in, n_hid, ein=None):
+        super().__init__()
+        self.node_emb_f = nn.Sequential(nn.Linear(n_in, n_hid))
+        if ein is not None:
+            self.node_emb_t = nn.Sequential(nn.Linear(n_in, n_hid))
+            self.edge_emb = nn.Sequential(nn.Linear(ein, n_hid))
+        self.net = nn.Sequential(nn.Linear(n_hid, n_hid), nn.ReLU(), nn.Linear(n_hid, n_in))
+
+    def forward(self, x, e=None, adj=None):
+        """
+        x: batch * node * feature
+        e : batch * node * node * feature
+        adj: batch * num_node * num_node
+        """
+        num_node = x.shape[1]
+        diag_indices = torch.arange(num_node)
+        if e is not None:
+            node_emb_1 = self.node_emb_f(x)
+            node_emb_2 = self.node_emb_t(x)
+            node_emb = node_emb_1.unsqueeze(1) + node_emb_2.unsqueeze(2)
+            edge_emb = self.edge_emb(e)
+            edge_emb[:, diag_indices, diag_indices, :] = 0
+            node_emb[:, diag_indices, diag_indices, :] = 0
+            node_emb = torch.relu(edge_emb + node_emb).mean(2)
+        elif adj is not None:
+            node_emb = self.node_emb_f(x)
+            adj = adj.view(-1, num_node, num_node) + \
+                  torch.eye(num_node).view(1, num_node, num_node).to(x.device)
+            adj =  adj / adj.sum(2).view(-1, num_node, 1)
+            node_emb = torch.matmul(adj, node_emb)
+        else:
+            raise NotImplementedError
+        emb = self.net(node_emb)
+        return emb + x
+
+class GraphNet(nn.Module):
+    def __init__(self, nin, nout, nh, ein=None, nl=3, act='sigmoid'):
+        net = [nn.Linear(nin, nh)]
+        for _ in range(nl):
+            net += [GraphResBlock(nh, nh//2, ein)]
+        net.append(nn.Linear(nh, nout))
+        if act is not None:
+            net.append(act_list[act])
+        self.net = nn.ModuleList(net)
+
+    def forward(self, x, e=None, adj=None):
+        for layer in self.net:
+            if isinstance(layer, GraphResBlock):
+                x = layer(x, e, adj)
+            else:
+                x = layer(x)
+        return x
 
 
 
@@ -248,9 +282,11 @@ class GINN(nn.Module):
 ###################################################################
 class GaugeNN(nn.Module):
     """
-    gauge NN: y = f(c) + g(x,c) * x
-        f(c): interior point finder
-        g(x,c): scaling function, monotonic on ||x||, conditioned on x/||x|| and c
+    gauge NN: x = f(c) + g(z,c) * z
+        f(c): interior point predictor
+        z: unit vectors in sphere
+        g(z,c): scaling function (>0), such that x is boundary point
+    objective function: min_{f,g}  V(x) - [max_z g(z,c) - min_z g(x,z)]
     """
     def __init__(self, nx, nc, nh):
         super().__init__()

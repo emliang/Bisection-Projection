@@ -1,313 +1,14 @@
 import torch
 import numpy as np
-import cvxpy as cp
-import copy
-import scipy as sp
 import multiprocessing as mp
-from .run_pf1 import runpf
-from pypower.api import opf
-torch.set_default_dtype(torch.float64)
+import torch
+torch.set_default_dtype(torch.float32)
 n_process = 10
+
 from .acopf_problem import ACOPF_Problem, Grpah_ACOPF_Problem
 from .graph_problem import GraphQP_Problem
 from .wireless_problem import PowerControl_Problem
-
-###################################################################
-# Iterative solver for optimization problem
-###################################################################
-def solve_opt_problem(args):
-    prob_type = args[0]
-    if prob_type == 'qp':
-        prob_type, Q, p, A, G, h, L, U, Xi = args
-        y = cp.Variable(len(Q))
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y),
-                          [G @ y <= h, y <= U, y >= L,
-                           A @ y == Xi])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'qcqp':
-        prob_type, Q, p, A, G, H, h, L, U, Xi, ydim, nineq = args
-        y = cp.Variable(ydim)
-        constraints = [A @ y == Xi, y <= U, y >= L]
-        for i in range(nineq):
-            Ht = H[i]
-            Gt = G[i]
-            ht = h[i]
-            constraints.append(0.5 * cp.quad_form(y, Ht) + Gt.T @ y <= ht)
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y),
-                          constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'socp':
-        prob_type, Xi, Q, p, A, G, h, C, d, L, U, ydim, nineq = args
-        y = cp.Variable(ydim)
-        soc_constraints = [cp.SOC(C[i].T @ y + d[i], G[i] @ y + h[i]) for i in range(nineq)]
-        constraints = soc_constraints + [A @ y == Xi] + [y <= U] + [y >= L]
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'sdp':
-        prob_type, Xi, Q, A, L, U, ymdim, neq = args
-        y = cp.Variable((ymdim, ymdim), symmetric=True)
-        prob = cp.Problem(cp.Minimize(cp.trace(Q @ y)),
-                          [y >> 0] + [y <= U] + [y >= L] +
-                          [cp.trace(A[i] @ y) == Xi[i] for i in range(neq)])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'jccim':
-        prob_type, Q, p, A, W, G, h, L, U, Xi = args
-        num_scenario  = len(W)
-        y = cp.Variable(len(Q))
-        constraints = [y <= U, y >= L]
-        constraints += [A @ y >= Xi + W[i] for i in range(num_scenario)]
-        constraints += [G @ y <= h]
-        # constraints.append(cp.sum(z) / num_scenario >= 0.9)
-        prob = cp.Problem(cp.Minimize(p.T @ y), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'acpf':
-        prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['bus'][spv, VM] = vmi[spv]
-        ppc['gen'][pv_, PG] = pgi[pv_]
-        my_result = runpf(ppc, ppopt)[0]
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        y = np.concatenate([pg, qg, vm, va])
-        sol = y.value
-    elif prob_type == 'acopf':
-        prob_type, i, Xi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        my_result = opf(ppc, ppopt)
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        sol = np.concatenate([pg, qg, vm, va])
-    return sol
-
-def solve_proj_problem(args):
-    prob_type = args[0]
-    if prob_type == 'qp':
-        prob_type, Q, p, A, G, h, L, U, Xi, y_pred = args
-        y = cp.Variable(len(Q))
-        prob = cp.Problem(cp.Minimize(cp.sum_squares(y - y_pred)),
-                          [G @ y <= h, y <= U, y >= L,
-                           A @ y == Xi])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'qcqp':
-        prob_type, Q, p, A, G, H, h, L, U, Xi, ydim, nineq, y_pred = args
-        y = cp.Variable(ydim)
-        constraints = [A @ y == Xi, y <= U, y >= L]
-        for i in range(nineq):
-            Ht = H[i]
-            Gt = G[i]
-            ht = h[i]
-            constraints.append(0.5 * cp.quad_form(y, Ht) + Gt.T @ y <= ht)
-        prob = cp.Problem(cp.Minimize(cp.sum_squares(y - y_pred)),
-                          constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'socp':
-        prob_type, Xi, y_pred, Q, p, A, G, h, C, d, L, U, ydim, nineq = args
-        y = cp.Variable(ydim)
-        soc_constraints = [cp.SOC(C[i].T @ y + d[i], G[i] @ y + h[i]) for i in range(nineq)]
-        constraints = soc_constraints + [A @ y == Xi] + [y <= U] + [y >= L]
-        prob = cp.Problem(cp.Minimize(cp.sum_squares(y - y_pred)), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'sdp':
-        prob_type, Xi, y_pred, Q, A, L, U, ymdim, neq = args
-        y = cp.Variable((ymdim, ymdim), symmetric=True)
-        prob = cp.Problem(cp.Minimize(cp.sum_squares(y - y_pred)),
-                          [y >> 0] + [y <= U] + [y >= L] +
-                          [cp.trace(A[i] @ y) == Xi[i] for i in range(neq)])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'jccim':
-        prob_type, Q, p, A, W, G, h, L, U, Xi, y_pred = args
-        num_scenario  = len(W)
-        y = cp.Variable(len(Q))
-        t = cp.Variable(len(Q))
-        constraints = [y <= U, y >= L]
-        constraints += [A @ y >= Xi + W[i] for i in range(50)]
-        constraints += [G @ y <= h]
-        # constraints.append(cp.sum(z) / num_scenario >= 0.9)
-        prob = cp.Problem(cp.Minimize(cp.sum_squares(y - y_pred)), constraints)
-        # constraints += [t>= (y-y_pred), t<= -(y-y_pred)]
-        # prob = cp.Problem(cp.Minimize(cp.sum(t)), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'acopf':
-        prob_type, i, Xi, pgi, qgi, vmi, vai, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['gencost'][:, COST] = 1
-        ppc['gencost'][:, COST + 1] = -2 * pgi
-        # Set reduced voltage bounds if applicable
-        ppc['bus'][:, idx_bus.VM] = vmi
-        ppc['bus'][:, idx_bus.VA] = vai
-        ppc['gen'][:, idx_gen.PG] = pgi
-        ppc['gen'][:, idx_gen.QG] = qgi
-        my_result = opf(ppc, ppopt)
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        sol = np.concatenate([pg, qg, vm, va])
-    return sol
-
-def solve_warmstart_problem(args):
-    prob_type = args[0]
-    if prob_type == 'qp':
-        prob_type, Q, p, A, G, h, L, U, Xi, y_pred = args
-        y = cp.Variable(len(Q))
-        y.value = y_pred
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y),
-                          [G @ y <= h, y <= U, y >= L,
-                           A @ y == Xi])
-        prob.solve(warm_start=True)
-        sol = y.value
-    elif prob_type == 'qcqp':
-        prob_type, Q, p, A, G, H, h, L, U, Xi, ydim, nineq, y_pred = args
-        y = cp.Variable(ydim)
-        y.value = y_pred
-        constraints = [A @ y == Xi, y <= U, y >= L]
-        for i in range(nineq):
-            Ht = H[i]
-            Gt = G[i]
-            ht = h[i]
-            constraints.append(0.5 * cp.quad_form(y, Ht) + Gt.T @ y <= ht)
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y),
-                          constraints)
-        prob.solve(warm_start=True)
-        sol = y.value
-    elif prob_type == 'socp':
-        prob_type, Xi, y_pred, Q, p, A, G, h, C, d, L, U, ydim, nineq = args
-        y = cp.Variable(ydim)
-        y.value = y_pred
-        soc_constraints = [cp.SOC(C[i].T @ y + d[i], G[i] @ y + h[i]) for i in range(nineq)]
-        constraints = soc_constraints + [A @ y == Xi] + [y <= U] + [y >= L]
-        prob = cp.Problem(cp.Minimize((1 / 2) * cp.quad_form(y, Q) + p.T @ y), constraints)
-        prob.solve(warm_start=True)
-        sol = y.value
-    elif prob_type == 'sdp':
-        prob_type, Xi, y_pred, Q, A, L, U, ymdim, neq = args
-        y = cp.Variable((ymdim, ymdim), symmetric=True)
-        y.value = y_pred
-        prob = cp.Problem(cp.Minimize(cp.trace(Q @ y)),
-                          [y >> 0] + [y <= U] + [y >= L] +
-                          [cp.trace(A[i] @ y) == Xi[i] for i in range(neq)])
-        prob.solve(warm_start=True)
-        sol = y.value
-    elif prob_type == 'jccim':
-        prob_type, Q, p, A, W, G, h, L, U, Xi, y_pred = args
-        num_scenario  = len(W)
-        y = cp.Variable(len(Q))
-        y.value = y_pred
-        constraints = [y <= U, y >= L]
-        constraints += [A @ y >= Xi + W[i] for i in range(num_scenario)]
-        constraints += [G @ y <= h]
-        # constraints.append(cp.sum(z) / num_scenario >= 0.9)
-        prob = cp.Problem(cp.Minimize(p.T @ y), constraints)
-        prob.solve(warm_start=True)
-        sol = y.value
-    elif prob_type == 'acopf':
-        prob_type, i, Xi, pgi, qgi, vmi, vai, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        # Set reduced voltage bounds if applicable
-        ppc['bus'][:, idx_bus.VM] = vmi
-        ppc['bus'][:, idx_bus.VA] = vai
-        ppc['gen'][:, idx_gen.PG] = pgi
-        ppc['gen'][:, idx_gen.QG] = qgi
-        my_result = opf(ppc, ppopt)
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        sol = np.concatenate([pg, qg, vm, va])
-    return sol
-
-def solve_feasibility_problem(args):
-    prob_type = args[0]
-    if prob_type == 'qp':
-        prob_type, Q, p, A, G, h, L, U, Xi = args
-        y = cp.Variable(len(Q))
-        prob = cp.Problem([G @ y <= h, y <= U, y >= L,
-                           A @ y == Xi])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'qcqp':
-        prob_type, Q, p, A, G, H, h, L, U, Xi, ydim, nineq = args
-        y = cp.Variable(ydim)
-        constraints = [A @ y == Xi, y <= U, y >= L]
-        for i in range(nineq):
-            Ht = H[i]
-            Gt = G[i]
-            ht = h[i]
-            constraints.append(0.5 * cp.quad_form(y, Ht) + Gt.T @ y <= ht)
-        prob = cp.Problem(cp.Minimize(0), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'socp':
-        prob_type, Xi, Q, p, A, G, h, C, d, L, U, ydim, nineq = args
-        y = cp.Variable(ydim)
-        soc_constraints = [cp.SOC(C[i].T @ y + d[i], G[i] @ y + h[i]) for i in range(nineq)]
-        constraints = soc_constraints + [A @ y == Xi] + [y <= U] + [y >= L]
-        prob = cp.Problem(constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'sdp':
-        prob_type, Xi, Q, A, L, U, ymdim, neq = args
-        y = cp.Variable((ymdim, ymdim), symmetric=True)
-        prob = cp.Problem(
-                          [y >> 0] + [y <= U] + [y >= L] +
-                          [cp.trace(A[i] @ y) == Xi[i] for i in range(neq)])
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'jccim':
-        prob_type, Q, p, A, W, G, h, L, U, Xi = args
-        num_scenario = len(W)
-        y = cp.Variable(len(Q))
-        constraints = [y <= U, y >= L]
-        constraints += [A @ y >= Xi + W[i] for i in range(num_scenario)]
-        constraints += [G @ y <= h]
-        # constraints.append(cp.sum(z) / num_scenario >= 0.9)
-        prob = cp.Problem(cp.Minimize(0), constraints)
-        prob.solve()
-        sol = y.value
-    elif prob_type == 'acpf':
-        prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['bus'][spv, VM] = vmi[spv]
-        ppc['gen'][pv_, PG] = pgi[pv_]
-        my_result = runpf(ppc, ppopt)[0]
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        y = np.concatenate([pg, qg, vm, va])
-        sol = y.value
-    elif prob_type == 'acopf':
-        prob_type, i, Xi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['gencost'][:, COST] = 1
-        ppc['gencost'][:, COST + 1] = 1
-        my_result = opf(ppc, ppopt)
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        sol = np.concatenate([pg, qg, vm, va])
-    return sol
+from .solver_utils import *
 
 
 ###################################################################
@@ -321,10 +22,20 @@ class Base_Problem:
         self.U = torch.tensor(dataset['YU'] )
         self.X = torch.tensor(dataset['X'] )
         self.Y = torch.tensor(dataset['Y'] )
-        self.num = dataset['X'].shape[0]
+        self.datasize = dataset['X'].shape[0]
         self.device = None#DEVICE
         # self.valid_frac = valid_frac
         # self.test_frac = test_frac
+
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
 
     def eq_grad(self, X, Y):
         grad_list = []
@@ -381,6 +92,10 @@ class Base_Problem:
         scale_Y = Y * (self.U - self.L) + self.L
         return scale_Y
 
+    def inverse_scale(self, X, Y):
+        norm_Y = (Y -  self.L) / (self.U - self.L + 1e-8)
+        return norm_Y
+
     def scale(self, X, Y):
         if Y.shape[1] < self.ydim:
             Y_scale = self.scale_partial(X, Y)
@@ -426,7 +141,7 @@ class QP_Problem(Base_Problem):
         self.Y = torch.tensor(dataset['Y'] )
         self.xdim = dataset['X'].shape[1]
         self.ydim = dataset['Q'].shape[0]
-        self.neq = dataset['X'].shape[0]
+        self.neq = dataset['X'].shape[1]
         self.nineq = dataset['G'].shape[0]
         self.nknowns = 0
 
@@ -444,7 +159,7 @@ class QP_Problem(Base_Problem):
 
     def __str__(self):
         return 'QP_Problem-{}-{}-{}-{}'.format(
-            str(self.ydim), str(self.nineq), str(self.neq), str(self.num)
+            str(self.ydim), str(self.nineq), str(self.neq), str(self.datasize)
         )
 
     def obj_fn(self, Y):
@@ -541,10 +256,9 @@ class QCQP_Probem(QP_Problem):
         super().__init__(dataset, test_size)
         self.H_np = dataset['H']
         self.H = torch.tensor(dataset['H'] )
-
     def __str__(self):
         return 'QCQP_Problem-{}-{}-{}-{}'.format(
-            str(self.ydim), str(self.nineq), str(self.neq), str(self.num)
+            str(self.ydim), str(self.nineq), str(self.neq), str(self.datasize)
         )
 
     def ineq_resid(self, X, Y):
@@ -646,10 +360,9 @@ class SOCP_Probem(QP_Problem):
         self.d_np = dataset['d']
         self.C = torch.tensor(dataset['C'] )
         self.d = torch.tensor(dataset['d'] )
-
     def __str__(self):
         return 'SOCPProblem-{}-{}-{}-{}'.format(
-            str(self.ydim), str(self.nineq), str(self.neq), str(self.num)
+            str(self.ydim), str(self.nineq), str(self.neq), str(self.datasize)
         )
 
     def ineq_resid(self, X, Y):
@@ -758,7 +471,7 @@ class SDP_Probem(Base_Problem):
         self.ymdim = dataset['Q'].shape[0]
         # self.ydim = self.ymdim**2
         self.ydim = int(self.ymdim * (self.ymdim + 1) /2)
-        self.num = dataset['X'].shape[0]
+        self.datasize = dataset['X'].shape[0]
         self.neq = dataset['X'].shape[1]
         self.nineq = self.ymdim
         self.nknowns = 0
@@ -792,7 +505,7 @@ class SDP_Probem(Base_Problem):
         
     def __str__(self):
         return 'SDPProblem-{}-{}-{}-{}'.format(
-            str(self.ydim), str(self.nineq), str(self.neq), str(self.num)
+            str(self.ydim), str(self.nineq), str(self.neq), str(self.datasize)
         )
 
     def obj_fn(self, Y):
@@ -808,47 +521,38 @@ class SDP_Probem(Base_Problem):
 
     def ineq_resid(self, X, Y):
         Y = self.recover_matrix_from_lower_triangle_batch(Y, self.ymdim)
-        """
-        Y>>0 -> xYx > 0
-        Definition of positive matrix
-        """
-        ## sample-based methods
-        # num_sample = 4096
-        # est = torch.randn(size=(1, self.ymdim, num_sample), device=X.device)  # batch * n * k
-        # est = est# / torch.norm(est, dim=1, p=2, keepdim=True)
-        # pel = torch.matmul(Y, est)  # batch * n * k
-        # pel = torch.multiply(pel, est).sum(1)  # batch * n * k
-        # r1 = -1*pel
+        r1 = (self.L - Y).view(-1,self.ymdim**2)
+        r2 = (Y - self.U).view(-1,self.ymdim**2)
         """
         Needell, D., Swartworth, W., & Woodruff, D. P. (2022, October). 
         Testing positive semidefiniteness using linear measurements. 
         In 2022 IEEE 63rd Annual Symposium on Foundations of Computer Science (FOCS) (pp. 87-97). IEEE.
         """
-        num_step = 100
-        est = torch.randn(size=(X.shape[0], self.ymdim, 1), device=X.device)  # batch * n * 1
-        est = est / torch.norm(est, dim=1, p=2, keepdim=True)
-        est_list = [est]
-        for _ in range(num_step-1):
-            noise = torch.randn(size=(X.shape[0], self.ymdim, 1), device=X.device)
-            noise = noise * noise.permute(0,2,1)
-            noise = torch.matmul(noise, Y.detach())
-            grad = torch.matmul(noise, est)
-            # grad = torch.matmul(Y.detach(), est)
-            est = est -  0.01 * grad
-            est = est / torch.norm(est, dim=1, p=2, keepdim=True)
-            est_list.append(est)
-        est = torch.cat(est_list, dim=-1).detach()
-        pel = torch.matmul(Y, est)  # batch * n * b
-        pel = torch.multiply(pel, est).sum(1)  # batch * n * b
-        r1 = -1 * pel
+        # num_step = 100
+        # est = torch.randn(size=(X.shape[0], self.ymdim, 1), device=X.device)  # batch * n * 1
+        # est = est / torch.norm(est, dim=1, p=2, keepdim=True)
+        # est_list = []
+        # momentum = 0
+        # lr = 0.1
+        # for _ in range(num_step):
+        #     # noise = torch.randn(size=(X.shape[0], self.ymdim, 1), device=X.device)
+        #     # grad = torch.matmul(torch.matmul(noise @ noise.transpose(1, 2), Y), est)
+        #     grad = torch.matmul(Y.detach(), est)
+        #     momentum = 0.9 * momentum + 0.1 * grad
+        #     est = est - lr * momentum
+        #     est = est / torch.norm(est, dim=1, p=2, keepdim=True)
+        #     est_list.append(est)
+        # est = torch.cat(est_list, dim=-1).detach()
+        # pel = torch.multiply(torch.matmul(Y, est), est).sum(1)[:,-10:]  # batch * n * b
+        # r3 = -1 * pel
 
-        # pel = torch.clamp(-1*pel, 0)
-        # r1 = pel.view(-1, num_step).sum(1, keepdim=True)
+        """
+        Auto-differentiable PSD constraint
+        """
+        eigenval = torch.linalg.eigvalsh(Y)
+        r3 = -1 * eigenval
 
-        r2 = (self.L - Y).view(-1,self.ymdim**2)
-        r3 = (Y - self.U).view(-1,self.ymdim**2)
-        # Ye = self.get_lower_triangle_from_matrix_batch(Y, self.ymdim)
-        # r4 = Ye @ self.G.T - self.h
+
         resids = torch.cat([r1, r2, r3], dim=1)
         return torch.clamp(resids, 0)
 
@@ -859,14 +563,11 @@ class SDP_Probem(Base_Problem):
         u = (Y - self.U).view(-1,self.ymdim**2)
         r2 = torch.cat([l,u], dim=1)
         """
-        Check the minimum eigenvalues
+        Check PSD constraint
         """
-        L, info = torch.linalg.cholesky_ex(Y)
-        r3 = info.view(-1,1)
-        # eigvals = torch.linalg.eigvalsh(Y)
-        # r3 = -1 * torch.min(eigvals, dim=1, keepdim=True)[0]
-        # r3,_ = torch.lobpcg(Y, largest=False)
-        # r3=r3*-1
+        _, info = torch.linalg.cholesky_ex(Y)
+        r3 = info.view(-1,1).sign()
+
         # Ye = self.get_lower_triangle_from_matrix_batch(Y, self.ymdim)
         # r4 = Ye @ self.G.T - self.h
         resids = torch.cat([r1, r2, r3], dim=1)
@@ -889,7 +590,7 @@ class SDP_Probem(Base_Problem):
     #     return X
 
     # def recover_matrix_from_lower_triangle_batch(self, X, n):
-        return torch.stack([self.recover_matrix_from_lower_triangle(x, n) for x in X])
+        # return torch.stack([self.recover_matrix_from_lower_triangle(x, n) for x in X])
 
     def get_lower_triangle_from_matrix_batch(self, X, n):
         X_extend = X.view(-1, n*n)
@@ -1009,6 +710,7 @@ class JCCIM_Problem(Base_Problem):
         self.neq = dataset['X'].shape[0]
         self.nineq = dataset['G'].shape[0]
         self.nknowns = 0
+        self.nscenario = self.W.shape[0]
 
         self.partial_vars_idx = np.arange(self.ydim)
         self.intrin_dim = max(len(self.partial_vars_idx), self.xdim)
@@ -1026,9 +728,19 @@ class JCCIM_Problem(Base_Problem):
         self.testY = self.Y[-test_size:]
 
     def __str__(self):
-        return 'JCCIM_Problem-{}-{}-{}-{}'.format(
-            str(self.ydim), str(self.nineq), str(self.neq), str(self.num)
+        return 'JCCIM_Problem-{}-{}-{}-{}-{}'.format(
+            str(self.ydim), str(self.nineq), str(self.neq),str(self.nscenario),str(self.datasize)
         )
+
+    def to_device(self, device):
+        self.device = device
+        for attr in dir(self):
+            var = getattr(self, attr)
+            if torch.is_tensor(var):
+                try:
+                    setattr(self, attr, var.to(device))
+                except AttributeError:
+                    pass
 
     def obj_fn(self, Y):
         # 0.5 * (Y @ self.Q) * Y +
@@ -1045,10 +757,8 @@ class JCCIM_Problem(Base_Problem):
         res_2 = torch.clamp(res_2, 0)
         res_2 = res_2.mean(-1)
         quantile_penalty = torch.quantile(res_2, q=q, dim=1, keepdim=True)
-        mask = res_2 > quantile_penalty
-        mask_1 = res_2 <= quantile_penalty
-        quantile_res = (res_2 * mask).sum(dim=1) * (q) + \
-                       (res_2 * mask_1).sum(dim=1) * (1-q)
+        mask = (res_2 <= quantile_penalty).float()
+        quantile_res = torch.clamp(res_2 * mask, min=0).sum(dim=1)
         quantile_res = quantile_res.view(-1,1)
         l = self.L - Y
         u = Y - self.U
@@ -1060,7 +770,7 @@ class JCCIM_Problem(Base_Problem):
         res_2 = [X + self.W[[i]] - Y @ self.A.T for i in range(self.W.shape[0])]
         res_2 = torch.stack(res_2, dim=1)
         res_2 = torch.clamp(res_2, 0)
-        res_2 = res_2.mean(-1)
+        res_2 = res_2.max(-1)[0]
         fea_mask = res_2<=1e-5
         fea_rate = (torch.ones_like(fea_mask, dtype=res_2.dtype)*fea_mask).mean(-1, keepdim=True)
         quantile_fea = q - fea_rate
@@ -1105,7 +815,6 @@ class JCCIM_Problem(Base_Problem):
             raise NotImplementedError
         return sols
 
-
     def opt_ip(self, X, solver_type='cvxpy', tol=1e-5):
         if solver_type == 'cvxpy':
             print('running cvxpy', end='\r')
@@ -1127,6 +836,9 @@ class JCCIM_Problem(Base_Problem):
                 self.Q_np, self.p_np, self.A_np, self.W_np, self.G_np, self.h_np, self.L_np, self.U_np
             X_np = X.detach().cpu().numpy()
             Y_pred_np = Y_pred.detach().cpu().numpy()
+
+            # for Xi, y_pred in zip(X_np, Y_pred_np):
+            #     solve_proj_problem(('jccim', Q, p, A, W, G, h, L, U, Xi, y_pred) )
 
             with mp.Pool(processes=n_process) as pool:
                 params = [('jccim', Q, p, A, W, G, h, L, U, Xi, y_pred) for Xi, y_pred in zip(X_np, Y_pred_np)]

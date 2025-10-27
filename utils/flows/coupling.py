@@ -313,3 +313,37 @@ class Sigmoid(nn.Module):
         else:
             x = inputs
             return torch.log(x / (1 - x)), -torch.log((inputs - inputs ** 2))
+
+
+class ModifiedSigmoid(nn.Module):
+    def __init__(self):
+        super(ModifiedSigmoid, self).__init__()
+        self.lower = -0.1
+        self.upper = 1.1
+        self.scale = self.upper - self.lower
+
+    def forward(self, inputs, cond_inputs=None, mode='direct'):
+        if mode == 'direct':
+            # Standard sigmoid
+            standard_sigmoid = torch.sigmoid(inputs)
+
+            # Scale and shift to map from [0,1] to [lower,upper]
+            y = self.lower + self.scale * standard_sigmoid
+
+            # For log_det calculation, need to account for the scaling
+            log_det = torch.log(self.scale * standard_sigmoid * (1 - standard_sigmoid))
+
+            return y, log_det
+        else:
+            # Inverse operation
+            # First, normalize x back to [0,1] range
+            normalized_x = (inputs - self.lower) / self.scale
+
+            # Apply inverse sigmoid (logit)
+            x = torch.log(normalized_x / (1 - normalized_x))
+
+            # Log determinant of Jacobian for inverse
+            # We need to account for the scaling factor
+            log_det = -torch.log(self.scale * normalized_x * (1 - normalized_x))
+
+            return x, log_det

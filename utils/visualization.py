@@ -1,11 +1,11 @@
-from utils.training_utils import *
-from utils.sampling_utils import *
-from utils.toy_utils import *
-from utils.nn_utils import  *
-from default_args import  *
-from matplotlib.lines import Line2D
+from .training_utils import *
+from .sampling_utils import *
+from .toy_utils import *
+# from .nn_utils import  *
+# from default_args import  *
+# from matplotlib.lines import Line2D
 
-args = config()
+# args = config()
 
 ###################################################################
 # Plot figures for homeomorphic projection
@@ -62,7 +62,7 @@ def scatter_constraint_approximation(model, constraints, x_tensor, instance_path
     plt.subplots_adjust(wspace=0.15)
     seed = paras['seed']
     shape = paras['shape']
-    dis_coff = paras['distortion_coefficient']
+    dis_coff = paras['w_distortion']
     plt.savefig(instance_path+f'/pics/{str(constraints)}_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
@@ -248,7 +248,7 @@ def scatter_projection_error(model, constraints, x_tensor, t_tensor, instance_pa
     plt.close()
     return
 
-def plot_projection_traj(model, constraints, c, simple_set, num_points=20):
+def plot_projection_traj(model, constraints, c, simple_set, args, num_points=20):
     x_tensor = constraints.sampling_infeasible(c, err=0.2, density=10).to(constraints.device)
     c_tensor = torch.as_tensor(c).to(constraints.device).view(1,-1)
 
@@ -286,39 +286,26 @@ def plot_projection_traj(model, constraints, c, simple_set, num_points=20):
             x_list.append(xt.detach().cpu().numpy())
     return z_list, x_list
 
-def visualize_homeo_projection(model, constraints, x_tensor, instance_path, paras):
+def visualize_homeo_projection(model, constraints, x_tensor, instance_path, paras, num_test=3, seed=2025):
     simple_set = paras['shape']
-    if 'Ball' in instance_path:
-        seed = 2024
-        np.random.seed(seed)
-    else:
-        seed = 2002
-        np.random.seed(seed)
-    c = np.random.rand(3, constraints.c_dim)
+    np.random.seed(seed)
+    c = np.random.rand(num_test, constraints.c_dim)
     t_test = c * (constraints.sampling_range[1] - constraints.sampling_range[0]) + constraints.sampling_range[0]
-    t_num = len(t_test)
     model.eval()
-    fig = plt.figure(figsize=[(t_num)*(4+0.2), 4.2])
+    fig = plt.figure(figsize=[(num_test)*(4+0.2), 4.2])
     fig.tight_layout()
-    grid = plt.GridSpec(1, t_num)
-
-    title_list = ['test input 1', 'test input 2', 'test input 3', 'test input 4']
-
+    grid = plt.GridSpec(1, num_test)
+    
+    plt.style.use('seaborn-whitegrid')  # White grid background
+    fig = plt.figure(figsize=[(num_test)*(4+0.2), 4.2])
+    title_list = [f'test input {i}' for i in range(1,10)]
     for i, t in enumerate(t_test):
         plt.subplot(grid[0,i])
-        # t_tensor = torch.tensor(t).to(device=x_tensor.device).view(1, -1).repeat(n_samples, 1)
-        # xt, _, _ = model(x_tensor, t_tensor)
-        # xt = xt.detach().cpu().numpy()
-        # plt.scatter(xt[:, 0], xt[:, 1], s=0.1, alpha=0.7, c=x_norm ,label='Constraint approximation')
-        z_list, x_list = plot_projection_traj(model, constraints, t, simple_set, num_points=10)
+        z_list, x_list = plot_projection_traj(model, constraints, t, simple_set, paras, num_points=10)
         constraints.fill_constraint(t)
         for k, traj in enumerate(x_list):
-            if k==0:
-                plt.scatter(traj[-1,0], traj[-1,1],alpha=0.5, s=15, c='C0', zorder=3, label='Homeo. Proj. points')
-                plt.scatter(traj[0, 0], traj[0, 1], alpha=0.5, s=15, c='C1', zorder=3, label='Infeasible points')
-            else:
-                plt.scatter(traj[-1,0], traj[-1,1],alpha=0.5, s=15, c='C0', zorder=3)
-                plt.scatter(traj[0, 0], traj[0, 1], alpha=0.5, s=15, c='C1', zorder=3)
+            plt.scatter(traj[-1,0], traj[-1,1],alpha=0.5, s=15, c='C0', zorder=3)
+            plt.scatter(traj[0, 0], traj[0, 1], alpha=0.5, s=15, c='C1', zorder=3)
             plt.plot(traj[:,0],traj[:,1], linewidth=0.5, alpha=0.5, c='lightcoral')
         plt.title(title_list[i], fontsize=19)
         plt.xlim([-2., 2.])
@@ -326,15 +313,16 @@ def visualize_homeo_projection(model, constraints, x_tensor, instance_path, para
         # plt.xticks([-2,0,2], fontsize=18)
         # plt.yticks([-2,0,2], fontsize=18)
 
-    lines, lables = fig.axes[0].get_legend_handles_labels()
-    # lines1, labels1 = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, lables, fontsize=15, ncol=2, bbox_to_anchor=[0.76, 0.13], framealpha=1)
+    plt.scatter([], [], alpha=0.5, s=15, c='C1', zorder=3, label='Infeasible points')
+    plt.scatter([], [], alpha=0.5, s=15, c='C0', zorder=3, label='Projected points')
+    fig.legend(fontsize=17, ncol=3, bbox_to_anchor=[0.7, 0.1], framealpha=1)
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.12)
 
-    seed = paras['seed']
+
+
     shape = paras['shape']
-    dis_coff = paras['distortion_coefficient']
+    dis_coff = paras['w_distortion']
     plt.savefig(instance_path+f'/pics/{str(constraints)}_proj_traj_{shape}_{dis_coff}_{seed}_{len(t_test)}_constraint_approximation_scatter.png', bbox_inches='tight', dpi=300)
     plt.show()
     plt.close()
@@ -384,28 +372,28 @@ def plot_bp_loss(data, paras, instance_path, instance, n_dim, c_dim):
 
 def plot_ip_bp_loss(data, paras, instance_path, instance, n_dim, c_dim):
     ### eccentric distance
-    fig = plt.figure(figsize=[4*(4+0.2), 4])
-    for i, n_ip in enumerate([1,2,4,8]):
-        fix_input = paras['fix_input']
-        softmin = paras['softmin']
-        softrange = paras['softrange']
-        minimum_ecc = paras['minimum_ecc']
-        instance = f'fix_{fix_input}_softmin_{softmin}_softrange_{softrange}_ip_{n_ip}_ecc_{minimum_ecc}'
-        loss_list = np.load(instance_path + '/nns/loss_' + instance + '.npy', allow_pickle=True)
-        total_iteration = paras['total_iteration']
-        plt.subplot(1, 4, i+1)
-        plt.scatter(np.arange(total_iteration), loss_list[1], label='Sample-based eccentricoty for IPs', marker='.', alpha=0.7,
-                    c='royalblue')
-        # plt.legend(fontsize=18)
-        plt.xlabel('Training iteration', fontsize=16)
-        plt.xticks(fontsize=14)
-        plt.ylabel('Average eccentricity', fontsize=16)
-        plt.yticks(fontsize=14)
-        plt.title(f'Training for IPNN {n_ip}', fontsize=18)
-        plt.ylim([0, 2])
-    lines, lables = fig.axes[0].get_legend_handles_labels()
-    # plt.legend(lines, lables,  fontsize=16, ncol=1, bbox_to_anchor=[0.1, 0.13], framealpha=1)
+    fig = plt.figure(figsize=[6, 5])
+    fix_input = paras['fix_input']
+    fixed_margin = paras['fixed_margin']
+    gamma = paras['gamma']
+    instance = f'fix_{fix_input}_ecc_{fixed_margin}_{gamma}'
+    loss_list = np.load(instance_path + '/nns/eccentricity_' + instance + '.npy', allow_pickle=True)
+    
+    total_iteration = np.arange(loss_list.shape[1]) * paras['resultsSaveFreq']
+    ylabel_list = ['Eccentricity', 'Max. IP-to-Boundary dist.', 'Min. IP-to-Boundary dist.']
+    line_style_list = ['-', '--', ':']
+    color_list = ['C0', 'C1', 'C2']
+    for i in range(loss_list.shape[0]):
+        plt.plot(total_iteration, loss_list[i], label=ylabel_list[i], alpha=0.7, linestyle=line_style_list[i], color=color_list[i])
+    plt.legend(fontsize=12)
+    plt.xlabel('Training iteration', fontsize=16)
+    plt.xticks(fontsize=14)
+    # plt.ylabel(ylabel_list[i], fontsize=16)
+    plt.yticks(fontsize=14)
+    plt.title(f'Training for IPNN', fontsize=18)
+    plt.ylim([0, loss_list.max()*1.1])
     plt.tight_layout()
+    plt.show()
     # fig.suptitle('Sample-based eccentricoty loss for training IPNN', fontsize=22)
     plt.savefig(instance_path + f'/pics/compare_ip_loss_{instance}.png')
 
@@ -514,58 +502,55 @@ def plot_bp_traj_varying_ip(data, paras, instance_path, instance, n_dim, c_dim, 
     # plt.show()
     plt.close()
 
-def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_dim, err=0.2, density=10):
+def plot_bp_traj_varying_input(data, paras, instance_path, instance, n_dim, c_dim, num_test=3, err=0.2, density=10, seed=2025):
     """
     Bisection projection traj under different number of inputs
     """
-    n_ip = paras['n_ip']
     model = torch.load(instance_path + f'/nns/model_{instance}.pth', map_location=data.device)
 
     if paras['fix_input']:
         c_sample = data.fix_c
     else:
         if 'Ball' in instance_path:
-            np.random.seed(2024)
+            np.random.seed(seed)
         else:
-            np.random.seed(2002)
-        c = np.random.rand(3, c_dim)
+            np.random.seed(seed)
+        c = np.random.rand(num_test, c_dim)
         c_sample = c * (data.sampling_range[1] - data.sampling_range[0]) + data.sampling_range[0]
 
-    n_test = c_sample.shape[0]
-    fig = plt.figure(figsize=[(n_test)*(4+0.2), 4.2])
-    title_list = ['test input 1', 'test input 2', 'test input 3', 'test input 4']
-    for i in range(n_test):
+    plt.style.use('seaborn-whitegrid')  # White grid background
+    plt.rcParams['axes.axisbelow'] = True  # This specifically puts grid below data
+    fig = plt.figure(figsize=[(num_test)*(4+0.2), 4.2])
+
+    title_list = [f'test input {i}' for i in range(1,10)]
+    for i in range(num_test):
         ct = c_sample[[i]]
         # modified infeasible sampling method
         x_tensor = data.sampling_infeasible(ct,err,density).to(data.device)
         c_tensor = torch.as_tensor(ct).to(data.device).view(1,-1)
         model.eval()
         with torch.no_grad():
-            ip = model(c_tensor).view(-1, n_ip, n_dim)
+            ip = model(c_tensor).view(-1, 1, n_dim)
         x_infeasible, x_feasible, ip_near, ip = plot_bp_traj(data, ip, c_tensor, x_tensor, paras)
-        plt.subplot(1, n_test, i + 1)
+        
+        plt.subplot(1, num_test, i + 1)
         data.fill_constraint(ct)
         for j in range(x_infeasible.shape[0]):
             plt.plot([x_infeasible[j, 0], x_feasible[j, 0]], [x_infeasible[j, 1], x_feasible[j, 1]],
                      linewidth=0.5, alpha=0.5, c='lightcoral')
-        # for j in range(x_infeasible.shape[0]):
-        #     plt.plot([x_feasible[j, 0], ip_near[j, 0]],
-        #              [x_feasible[j, 1], ip_near[j, 1]],  '--', linewidth=0.5, alpha=0.1, c='lightcoral')
-        plt.scatter(x_feasible[:, 0], x_feasible[:, 1], alpha=0.5, s=15, zorder=3, label='Bis. Proj. points')
-        plt.scatter(x_infeasible[:, 0], x_infeasible[:, 1], alpha=0.5, s=15, zorder=3, label='Infeasible points')
-        plt.scatter(ip[:, 0], ip[:, 1], marker='*', c='crimson', zorder=3, label='Interior points')
+        plt.scatter(ip[:, 0], ip[:, 1], marker='*', c='crimson')
+        plt.scatter(x_infeasible[:, 0], x_infeasible[:, 1], c = 'C1',alpha=0.5, s=20)
+        plt.scatter(x_feasible[:, 0], x_feasible[:, 1], c='C0', alpha=0.5, s=20)
         plt.xlim([-2., 2.])
         plt.ylim([-2., 2.])
-        # if i in [1,2]:
-        #     plt.xticks([], fontsize=14)
-        # plt.xticks([-1, 0, 1], fontsize=14)
-        # plt.yticks([-1, 0, 1], fontsize=14)
         plt.title(title_list[i], fontsize=19)
-    lines, lables = fig.axes[0].get_legend_handles_labels()
-    # lines1, labels1 = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, lables, fontsize=15, ncol=3, bbox_to_anchor=[0.83, 0.13], framealpha=1)
+    
+    plt.scatter([],[], marker='*', c='crimson', s=50, label='Interior points')
+    plt.scatter([],[], c = 'C1',alpha=0.7, s=50, label='Infeasible points')
+    plt.scatter([],[], c='C0', alpha=0.7, s=50, label='Projected points')
+    fig.legend(fontsize=17, ncol=3, bbox_to_anchor=[0.85, 0.1], framealpha=1)
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.12)
+    plt.subplots_adjust(bottom=0.12)    
     plt.savefig(instance_path + f'/pics/bis_{instance}.png', dpi=300)
     plt.show()
     plt.close()
@@ -615,4 +600,70 @@ def plot_illustration(paras, instance_path):
     # plt.show()
     # plt.close()
     
+def visualize_projection_comparison(nn_opt_gap_1, bis_opt_gap_wo_gamma, nn_opt_gap_2, bis_opt_gap_with_gamma, instance_path):
+    """
+    Visualize comparison of projected solutions with and without gamma.
+    
+    Args:
+        nn_opt_gap_1: Initial NN solution optimality gap (without gamma)
+        bis_opt_gap_wo_gamma: Projected solution optimality gap (without gamma)
+        nn_opt_gap_2: Initial NN solution optimality gap (with gamma)
+        bis_opt_gap_with_gamma: Projected solution optimality gap (with gamma)
+        instance_path: Path to save the figure
+    """
+    plt.figure(figsize=(12, 5))
+    
+    # Calculate the limits based on all data
+    x_min = min(min(nn_opt_gap_1*100), min(nn_opt_gap_2*100))
+    x_max = max(max(nn_opt_gap_1*100), max(nn_opt_gap_2*100))
+    y_min = min(min(bis_opt_gap_wo_gamma*100), min(bis_opt_gap_with_gamma*100))
+    y_max = max(max(bis_opt_gap_wo_gamma*100), max(bis_opt_gap_with_gamma*100))
+    
+    # Add some padding to the limits
+    x_padding = (x_max - x_min) * 0.05
+    y_padding = (y_max - y_min) * 0.05
+    x_min = max(0, x_min - x_padding)
+    x_max = x_max + x_padding
+    y_min = max(0, y_min - y_padding)
+    y_max = y_max + y_padding
+    
+    # Plot without gamma
+    plt.subplot(1, 2, 1)
+    plt.plot(nn_opt_gap_1*100, nn_opt_gap_1*100, label='Initial NN solution', c='C0', linestyle='-', linewidth=2)
+    plt.scatter(nn_opt_gap_1*100, bis_opt_gap_wo_gamma*100, label='Projected solution (w/o $\gamma$)', c='C3', s=10, alpha=0.3)
+    plt.xlabel('Initial Optimal gap (%)', fontsize=16)
+    plt.ylabel('Projected Optimal gap (%)', fontsize=16)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.xlim([x_min, x_max])
+    plt.ylim([y_min, y_max])
+    plt.legend(fontsize=14, loc='lower right')
+    
+    # Plot with gamma
+    plt.subplot(1, 2, 2)
+    plt.plot(nn_opt_gap_2*100, nn_opt_gap_2*100, label='Initial NN solution', c='C0', linestyle='-', linewidth=2)
+    plt.scatter(nn_opt_gap_2*100, bis_opt_gap_with_gamma*100, label='Projected solution (with $\gamma$)', c='C3', s=10, alpha=0.3)
+    plt.xlabel('Initial Optimal gap (%)', fontsize=16)
+    plt.ylabel('Projected Optimal gap (%)', fontsize=16)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.xlim([x_min, x_max])
+    plt.ylim([y_min, y_max])
+    plt.legend(fontsize=14, loc='lower right')
+    
+    plt.tight_layout()
+    plt.savefig(instance_path + '/pics/projection_comparison.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Print statistical summary
+    print(f"Statistical Summary:")
+    print(f"Without γ:")
+    print(f"  Mean Initial Gap: {np.mean(nn_opt_gap_1*100):.2f}%")
+    print(f"  Mean Projected Gap: {np.mean(bis_opt_gap_wo_gamma*100):.2f}%")
+    print(f"  Improvement: {np.mean(nn_opt_gap_1*100) - np.mean(bis_opt_gap_wo_gamma*100):.2f}%")
+    print(f"\nWith γ:")
+    print(f"  Mean Initial Gap: {np.mean(nn_opt_gap_2*100):.2f}%")
+    print(f"  Mean Projected Gap: {np.mean(bis_opt_gap_with_gamma*100):.2f}%")
+    print(f"  Improvement: {np.mean(nn_opt_gap_2*100) - np.mean(bis_opt_gap_with_gamma*100):.2f}%")
+
 
