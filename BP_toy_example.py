@@ -6,7 +6,6 @@ from utils.visualization import *
 
 
 
-
 def __main__():
     paras = {'constraint':  Complex_Constraints(), #Disconnected_Ball(), #
              'fix_input': False,
@@ -44,7 +43,7 @@ def __main__():
 
     instance = f'fix_{fix_input}_ecc_{fixed_margin}_{gamma}'
 
-    for exper_id in range(10):
+    for exper_id in range(1):
         paras['fix_input'] = fix_input
         model = NoiseResNet(data.c_dim, n_dim, paras['n_hid'], paras['n_layer'] , act=None, gamma=gamma).to(DEVICE)
         if paras['fix_input']:
