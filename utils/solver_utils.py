@@ -9,7 +9,7 @@ from pypower.ppoption import ppoption
 import torch
 import numpy as np
 import cvxpy as cp
-from .run_pf1 import runpf
+# from .run_pf1 import runpf
 from pypower.api import opf
 torch.set_default_dtype(torch.float64)
 n_process = 100
@@ -67,19 +67,19 @@ def solve_opt_problem(args):
         prob = cp.Problem(cp.Minimize(p.T @ y), constraints)
         prob.solve()
         sol = y.value
-    elif prob_type == 'acpf':
-        prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['bus'][spv, VM] = vmi[spv]
-        ppc['gen'][pv_, PG] = pgi[pv_]
-        my_result = runpf(ppc, ppopt)[0]
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        y = np.concatenate([pg, qg, vm, va])
-        sol = y.value
+    # elif prob_type == 'acpf':
+    #     prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
+    #     ppc['bus'][:, PD] = Xi[:nb] * baseMVA
+    #     ppc['bus'][:, QD] = Xi[nb:] * baseMVA
+    #     ppc['bus'][spv, VM] = vmi[spv]
+    #     ppc['gen'][pv_, PG] = pgi[pv_]
+    #     my_result = runpf(ppc, ppopt)[0]
+    #     pg = my_result['gen'][:, PG] / baseMVA
+    #     qg = my_result['gen'][:, QG] / baseMVA
+    #     vm = my_result['bus'][:, VM]
+    #     va = np.deg2rad(my_result['bus'][:, VA])
+    #     y = np.concatenate([pg, qg, vm, va])
+    #     sol = y.value
     elif prob_type == 'acopf':
         prob_type, i, Xi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
         ppc['bus'][:, PD] = Xi[:nb] * baseMVA
@@ -289,19 +289,19 @@ def solve_feasibility_problem(args):
         prob = cp.Problem(cp.Minimize(0), constraints)
         prob.solve()
         sol = y.value
-    elif prob_type == 'acpf':
-        prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
-        ppc['bus'][:, PD] = Xi[:nb] * baseMVA
-        ppc['bus'][:, QD] = Xi[nb:] * baseMVA
-        ppc['bus'][spv, VM] = vmi[spv]
-        ppc['gen'][pv_, PG] = pgi[pv_]
-        my_result = runpf(ppc, ppopt)[0]
-        pg = my_result['gen'][:, PG] / baseMVA
-        qg = my_result['gen'][:, QG] / baseMVA
-        vm = my_result['bus'][:, VM]
-        va = np.deg2rad(my_result['bus'][:, VA])
-        y = np.concatenate([pg, qg, vm, va])
-        sol = y.value
+    # elif prob_type == 'acpf':
+    #     prob_type, i, Xi, pgi, vmi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, spv, pv_, baseMVA, baseMVA = args
+    #     ppc['bus'][:, PD] = Xi[:nb] * baseMVA
+    #     ppc['bus'][:, QD] = Xi[nb:] * baseMVA
+    #     ppc['bus'][spv, VM] = vmi[spv]
+    #     ppc['gen'][pv_, PG] = pgi[pv_]
+    #     my_result = runpf(ppc, ppopt)[0]
+    #     pg = my_result['gen'][:, PG] / baseMVA
+    #     qg = my_result['gen'][:, QG] / baseMVA
+    #     vm = my_result['bus'][:, VM]
+    #     va = np.deg2rad(my_result['bus'][:, VA])
+    #     y = np.concatenate([pg, qg, vm, va])
+    #     sol = y.value
     elif prob_type == 'acopf':
         prob_type, i, Xi, ppc, ppopt, PD, QD, PG, QG, VM, VA, nb, baseMVA, baseMVA = args
         ppc['bus'][:, PD] = Xi[:nb] * baseMVA
